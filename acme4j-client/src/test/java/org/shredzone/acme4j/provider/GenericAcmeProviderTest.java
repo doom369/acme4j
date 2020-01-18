@@ -21,6 +21,8 @@ import java.net.URISyntaxException;
 import java.net.URL;
 
 import org.junit.Test;
+import org.shredzone.acme4j.connector.Connection;
+import org.shredzone.acme4j.connector.DefaultConnection;
 
 /**
  * Unit tests for {@link GenericAcmeProvider}.
@@ -50,6 +52,9 @@ public class GenericAcmeProviderTest {
 
         URL resolvedUrl = provider.resolve(serverUri);
         assertThat(resolvedUrl.toString(), is(equalTo(serverUri.toString())));
+
+        Connection connection = provider.connect(serverUri);
+        assertThat(connection, is(instanceOf(DefaultConnection.class)));
     }
 
 }

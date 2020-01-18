@@ -14,12 +14,12 @@
 package org.shredzone.acme4j;
 
 import static java.util.Objects.requireNonNull;
-import static org.shredzone.acme4j.toolbox.AcmeUtils.toAce;
+import static java.util.stream.Collectors.toList;
 
 import java.net.URL;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
-import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -29,7 +29,6 @@ import org.shredzone.acme4j.connector.Connection;
 import org.shredzone.acme4j.connector.Resource;
 import org.shredzone.acme4j.exception.AcmeException;
 import org.shredzone.acme4j.exception.AcmeProtocolException;
-import org.shredzone.acme4j.toolbox.JSON;
 import org.shredzone.acme4j.toolbox.JSONBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,9 +42,15 @@ public class OrderBuilder {
 
     private final Login login;
 
-    private final Set<String> domainSet = new LinkedHashSet<>();
+    private final Set<Identifier> identifierSet = new LinkedHashSet<>();
     private Instant notBefore;
     private Instant notAfter;
+    private boolean recurrent;
+    private Instant recurrentStart;
+    private Instant recurrentEnd;
+    private Duration recurrentValidity;
+    private Duration recurrentPredate;
+    private boolean recurrentGet;
 
     /**
      * Create a new {@link OrderBuilder}.
@@ -66,8 +71,7 @@ public class OrderBuilder {
      * @return itself
      */
     public OrderBuilder domain(String domain) {
-        domainSet.add(toAce(requireNonNull(domain, "domain")));
-        return this;
+        return identifier(Identifier.dns(domain));
     }
 
     /**
@@ -101,12 +105,41 @@ public class OrderBuilder {
     }
 
     /**
+     * Adds an {@link Identifier} to the order.
+     *
+     * @param identifier
+     *            {@link Identifier} to be added to the order.
+     * @return itself
+     * @since 2.3
+     */
+    public OrderBuilder identifier(Identifier identifier) {
+        identifierSet.add(requireNonNull(identifier, "identifier"));
+        return this;
+    }
+
+    /**
+     * Adds a collection of {@link Identifier} to the order.
+     *
+     * @param identifiers
+     *            Collection of {@link Identifier} to be added to the order.
+     * @return itself
+     * @since 2.3
+     */
+    public OrderBuilder identifiers(Collection<Identifier> identifiers) {
+        requireNonNull(identifiers, "identifiers").forEach(this::identifier);
+        return this;
+    }
+
+    /**
      * Sets a "not before" date in the certificate. May be ignored by the CA.
      *
      * @param notBefore "not before" date
      * @return itself
      */
     public OrderBuilder notBefore(Instant notBefore) {
+        if (recurrent) {
+            throw new IllegalArgumentException("cannot combine notBefore with recurrent");
+        }
         this.notBefore = requireNonNull(notBefore, "notBefore");
         return this;
     }
@@ -118,7 +151,118 @@ public class OrderBuilder {
      * @return itself
      */
     public OrderBuilder notAfter(Instant notAfter) {
+        if (recurrent) {
+            throw new IllegalArgumentException("cannot combine notAfter with recurrent");
+        }
         this.notAfter = requireNonNull(notAfter, "notAfter");
+        return this;
+    }
+
+    /**
+     * Enables short-term automatic renewal of the certificate. Must be supported by the
+     * CA.
+     * <p>
+     * Recurrent renewals cannot be combined with {@link #notBefore(Instant)} or
+     * {@link #notAfter(Instant)}.
+     *
+     * @return itself
+     * @since 2.3
+     */
+    public OrderBuilder recurrent() {
+        if (notBefore != null || notAfter != null) {
+            throw new IllegalArgumentException("cannot combine notBefore/notAfter with recurrent");
+        }
+        this.recurrent = true;
+        return this;
+    }
+
+    /**
+     * Sets the earliest date of validity of the first issued certificate. If not set,
+     * the start date is the earliest possible date.
+     * <p>
+     * Implies {@link #recurrent()}.
+     *
+     * @param start
+     *            Start date of validity
+     * @return itself
+     * @since 2.3
+     */
+    public OrderBuilder recurrentStart(Instant start) {
+        recurrent();
+        this.recurrentStart = requireNonNull(start, "start");
+        return this;
+    }
+
+    /**
+     * Sets the latest date of validity of the last issued certificate. If not set, the
+     * CA's default is used.
+     * <p>
+     * Implies {@link #recurrent()}.
+     *
+     * @param end
+     *            End date of validity
+     * @return itself
+     * @see Metadata#getStarMaxRenewal()
+     * @since 2.3
+     */
+    public OrderBuilder recurrentEnd(Instant end) {
+        recurrent();
+        this.recurrentEnd = requireNonNull(end, "end");
+        return this;
+    }
+
+    /**
+     * Sets the maximum validity period of each certificate. If not set, the CA's
+     * default is used.
+     * <p>
+     * Implies {@link #recurrent()}.
+     *
+     * @param duration
+     *            Duration of validity of each certificate
+     * @return itself
+     * @see Metadata#getStarMinCertValidity()
+     * @since 2.3
+     */
+    public OrderBuilder recurrentCertificateValidity(Duration duration) {
+        recurrent();
+        this.recurrentValidity = requireNonNull(duration, "duration");
+        return this;
+    }
+
+    /**
+     * Sets the amount of pre-dating each certificate. If not set, the CA's
+     * default (0) is used.
+     * <p>
+     * Implies {@link #recurrent()}.
+     *
+     * @param duration
+     *            Duration of certificate pre-dating
+     * @return itself
+     * @since 2.7
+     */
+    public OrderBuilder recurrentCertificatePredate(Duration duration) {
+        recurrent();
+        this.recurrentPredate = requireNonNull(duration, "duration");
+        return this;
+    }
+
+    /**
+     * Announces that the client wishes to fetch the recurring certificate via GET
+     * request. If not used, the STAR certificate can only be fetched via POST-as-GET
+     * request. {@link Metadata#isStarCertificateGetAllowed()} must return {@code true} in
+     * order for this option to work.
+     * <p>
+     * This option is only needed if you plan to fetch the STAR certificate via other
+     * means than by using acme4j.
+     * <p>
+     * Implies {@link #recurrent()}.
+     *
+     * @return itself
+     * @since 2.6
+     */
+    public OrderBuilder recurrentEnableGet() {
+        recurrent();
+        this.recurrentGet = true;
         return this;
     }
 
@@ -128,31 +272,45 @@ public class OrderBuilder {
      * @return {@link Order} that was created
      */
     public Order create() throws AcmeException {
-        if (domainSet.isEmpty()) {
-            throw new IllegalArgumentException("At least one domain is required");
+        if (identifierSet.isEmpty()) {
+            throw new IllegalArgumentException("At least one identifer is required");
         }
 
         Session session = login.getSession();
 
-        Object[] identifiers = new Object[domainSet.size()];
-        Iterator<String> di = domainSet.iterator();
-        for (int ix = 0; ix < identifiers.length; ix++) {
-            identifiers[ix] = new JSONBuilder()
-                            .put("type", "dns")
-                            .put("value", di.next())
-                            .toMap();
+        if (recurrent && !session.getMetadata().isStarEnabled()) {
+            throw new AcmeException("CA does not support short-term automatic renewals");
         }
 
         LOG.debug("create");
-        try (Connection conn = session.provider().connect()) {
+        try (Connection conn = session.connect()) {
             JSONBuilder claims = new JSONBuilder();
-            claims.array("identifiers", identifiers);
+            claims.array("identifiers", identifierSet.stream().map(Identifier::toMap).collect(toList()));
 
             if (notBefore != null) {
                 claims.put("notBefore", notBefore);
             }
             if (notAfter != null) {
                 claims.put("notAfter", notAfter);
+            }
+
+            if (recurrent) {
+                claims.put("recurrent", true);
+                if (recurrentStart != null) {
+                    claims.put("recurrent-start-date", recurrentStart);
+                }
+                if (recurrentStart != null) {
+                    claims.put("recurrent-end-date", recurrentEnd);
+                }
+                if (recurrentValidity != null) {
+                    claims.put("recurrent-certificate-validity", recurrentValidity);
+                }
+                if (recurrentPredate != null) {
+                    claims.put("recurrent-certificate-predate", recurrentPredate);
+                }
+                if (recurrentGet) {
+                    claims.put("recurrent-certificate-get", recurrentGet);
+                }
             }
 
             conn.sendSignedRequest(session.resourceUrl(Resource.NEW_ORDER), claims, login);
@@ -163,10 +321,7 @@ public class OrderBuilder {
             }
 
             Order order = new Order(login, orderLocation);
-            JSON json = conn.readJsonResponse();
-            if (json != null) {
-                order.setJSON(json);
-            }
+            order.setJSON(conn.readJsonResponse());
             return order;
         }
     }

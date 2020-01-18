@@ -18,10 +18,12 @@ import static org.junit.Assert.assertThat;
 
 import java.io.IOException;
 import java.security.KeyPair;
-import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Map;
 
 import org.jose4j.json.JsonUtil;
@@ -81,12 +83,14 @@ public class JSONBuilderTest {
     @Test
     public void testDate() {
         Instant date = ZonedDateTime.of(2016, 6, 1, 5, 13, 46, 0, ZoneId.of("GMT+2")).toInstant();
+        Duration duration = Duration.ofMinutes(5);
 
         JSONBuilder cb = new JSONBuilder();
         cb.put("fooDate", date);
-        cb.put("fooNull", null);
+        cb.put("fooDuration", duration);
+        cb.put("fooNull", (Object) null);
 
-        assertThat(cb.toString(), is("{\"fooDate\":\"2016-06-01T03:13:46Z\",\"fooNull\":null}"));
+        assertThat(cb.toString(), is("{\"fooDate\":\"2016-06-01T03:13:46Z\",\"fooDuration\":300,\"fooNull\":null}"));
     }
 
     /**
@@ -108,7 +112,6 @@ public class JSONBuilderTest {
      * Test JWK.
      */
     @Test
-    @SuppressWarnings("unchecked")
     public void testKey() throws IOException, JoseException {
         KeyPair keyPair = TestUtils.createKeyPair();
 
@@ -153,17 +156,17 @@ public class JSONBuilderTest {
         JSONBuilder res;
 
         JSONBuilder cb1 = new JSONBuilder();
-        res = cb1.array("ar", new Object[0]);
+        res = cb1.array("ar", Collections.emptyList());
         assertThat(res, is(sameInstance(cb1)));
         assertThat(cb1.toString(), is("{\"ar\":[]}"));
 
         JSONBuilder cb2 = new JSONBuilder();
-        res = cb2.array("ar", 123);
+        res = cb2.array("ar", Arrays.asList(123));
         assertThat(res, is(sameInstance(cb2)));
         assertThat(cb2.toString(), is("{\"ar\":[123]}"));
 
         JSONBuilder cb3 = new JSONBuilder();
-        res = cb3.array("ar", 123, "foo", 456);
+        res = cb3.array("ar", Arrays.asList(123, "foo", 456));
         assertThat(res, is(sameInstance(cb3)));
         assertThat(cb3.toString(), is("{\"ar\":[123,\"foo\",456]}"));
     }

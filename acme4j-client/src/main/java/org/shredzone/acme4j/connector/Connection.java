@@ -26,6 +26,7 @@ import javax.annotation.ParametersAreNonnullByDefault;
 import org.shredzone.acme4j.Login;
 import org.shredzone.acme4j.Session;
 import org.shredzone.acme4j.exception.AcmeException;
+import org.shredzone.acme4j.exception.AcmeProtocolException;
 import org.shredzone.acme4j.exception.AcmeRetryAfterException;
 import org.shredzone.acme4j.toolbox.JSON;
 import org.shredzone.acme4j.toolbox.JSONBuilder;
@@ -56,6 +57,38 @@ public interface Connection extends AutoCloseable {
      *            {@link Session} instance to be used for tracking
      */
     void sendRequest(URL url, Session session) throws AcmeException;
+
+    /**
+     * Sends a signed POST-as-GET request for a certificate resource. Requires a
+     * {@link Login} for the session and {@link KeyPair}. The {@link Login} account
+     * location is sent in a "kid" protected header.
+     * <p>
+     * If the server does not return a 200 class status code, an {@link AcmeException} is
+     * raised matching the error.
+     *
+     * @param url
+     *            {@link URL} to send the request to.
+     * @param login
+     *            {@link Login} instance to be used for signing and tracking.
+     * @return HTTP 200 class status that was returned
+     */
+    int sendCertificateRequest(URL url, Login login) throws AcmeException;
+
+    /**
+     * Sends a signed POST-as-GET request. Requires a {@link Login} for the session and
+     * {@link KeyPair}. The {@link Login} account location is sent in a "kid" protected
+     * header.
+     * <p>
+     * If the server does not return a 200 class status code, an {@link AcmeException} is
+     * raised matching the error.
+     *
+     * @param url
+     *            {@link URL} to send the request to.
+     * @param login
+     *            {@link Login} instance to be used for signing and tracking.
+     * @return HTTP 200 class status that was returned
+     */
+    int sendSignedPostAsGetRequest(URL url, Login login) throws AcmeException;
 
     /**
      * Sends a signed POST request. Requires a {@link Login} for the session and
@@ -98,9 +131,10 @@ public interface Connection extends AutoCloseable {
     /**
      * Reads a server response as JSON data.
      *
-     * @return The JSON response, or {@code null} if the server did not provide any data.
+     * @return The JSON response.
+     * @throws AcmeProtocolException
+     *         if the JSON response was empty.
      */
-    @CheckForNull
     JSON readJsonResponse() throws AcmeException;
 
     /**

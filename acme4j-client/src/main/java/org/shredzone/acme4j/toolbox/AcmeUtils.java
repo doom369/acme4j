@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Base64;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,14 +34,7 @@ import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 import javax.annotation.WillNotClose;
 import javax.annotation.concurrent.Immutable;
-import javax.crypto.SecretKey;
 
-import org.jose4j.base64url.Base64Url;
-import org.jose4j.jwk.EllipticCurveJsonWebKey;
-import org.jose4j.jwk.JsonWebKey;
-import org.jose4j.jwk.RsaJsonWebKey;
-import org.jose4j.jws.AlgorithmIdentifiers;
-import org.jose4j.jws.JsonWebSignature;
 import org.shredzone.acme4j.exception.AcmeProtocolException;
 
 /**
@@ -68,8 +62,12 @@ public final class AcmeUtils {
 
     private static final Pattern MAIL_PATTERN = Pattern.compile("\\?|@.*,");
 
+    private static final Pattern BASE64URL_PATTERN = Pattern.compile("[0-9A-Za-z_-]*");
+
     private static final Base64.Encoder PEM_ENCODER = Base64.getMimeEncoder(64,
                 "\n".getBytes(StandardCharsets.US_ASCII));
+    private static final Base64.Encoder URL_ENCODER = Base64.getUrlEncoder().withoutPadding();
+    private static final Base64.Decoder URL_DECODER = Base64.getUrlDecoder();
 
     /**
      * Enumeration of PEM labels.
@@ -141,7 +139,7 @@ public final class AcmeUtils {
      * @return base64 encoded string
      */
     public static String base64UrlEncode(byte[] data) {
-        return Base64Url.encode(data);
+        return URL_ENCODER.encodeToString(data);
     }
 
     /**
@@ -152,7 +150,21 @@ public final class AcmeUtils {
      * @return decoded data
      */
     public static byte[] base64UrlDecode(String base64) {
-        return Base64Url.decode(base64);
+        return URL_DECODER.decode(base64);
+    }
+
+    /**
+     * Validates that the given {@link String} is a valid base64url encoded value.
+     *
+     * @param base64
+     *            {@link String} to validate
+     * @return {@code true}: String contains a valid base64url encoded value.
+     *         {@code false} if the {@link String} was {@code null} or contained illegal
+     *         characters.
+     * @since 2.6
+     */
+    public static boolean isValidBase64Url(@Nullable String base64) {
+        return base64 != null && BASE64URL_PATTERN.matcher(base64).matches();
     }
 
     /**
@@ -166,83 +178,11 @@ public final class AcmeUtils {
      *
      * @param domain
      *            Domain name to encode
-     * @return Encoded domain name, white space trimmed and lower cased. {@code null} if
-     *         {@code null} was passed in.
+     * @return Encoded domain name, white space trimmed and lower cased.
      */
-    @CheckForNull
-    public static String toAce(@Nullable String domain) {
-        if (domain == null) {
-            return null;
-        }
+    public static String toAce(String domain) {
+        Objects.requireNonNull(domain, "domain");
         return IDN.toASCII(domain.trim()).toLowerCase();
-    }
-
-    /**
-     * Analyzes the key used in the {@link JsonWebKey}, and returns the key algorithm
-     * identifier for {@link JsonWebSignature}.
-     *
-     * @param jwk
-     *            {@link JsonWebKey} to analyze
-     * @return algorithm identifier
-     * @throws IllegalArgumentException
-     *             there is no corresponding algorithm identifier for the key
-     */
-    public static String keyAlgorithm(JsonWebKey jwk) {
-        if (jwk instanceof EllipticCurveJsonWebKey) {
-            EllipticCurveJsonWebKey ecjwk = (EllipticCurveJsonWebKey) jwk;
-
-            switch (ecjwk.getCurveName()) {
-                case "P-256":
-                    return AlgorithmIdentifiers.ECDSA_USING_P256_CURVE_AND_SHA256;
-
-                case "P-384":
-                    return AlgorithmIdentifiers.ECDSA_USING_P384_CURVE_AND_SHA384;
-
-                case "P-521":
-                    return AlgorithmIdentifiers.ECDSA_USING_P521_CURVE_AND_SHA512;
-
-                default:
-                    throw new IllegalArgumentException("Unknown EC name "
-                        + ecjwk.getCurveName());
-            }
-
-        } else if (jwk instanceof RsaJsonWebKey) {
-            return AlgorithmIdentifiers.RSA_USING_SHA256;
-
-        } else {
-            throw new IllegalArgumentException("Unknown algorithm " + jwk.getAlgorithm());
-        }
-    }
-
-    /**
-     * Analyzes the {@link SecretKey}, and returns the key algorithm
-     * identifier for {@link JsonWebSignature}.
-     *
-     * @param macKey
-     *            {@link SecretKey} to analyze
-     * @return algorithm identifier
-     * @throws IllegalArgumentException
-     *             there is no corresponding algorithm identifier for the key
-     */
-    public static String macKeyAlgorithm(SecretKey macKey) {
-        if (!"HMAC".equals(macKey.getAlgorithm())) {
-            throw new IllegalArgumentException("Bad algorithm: " + macKey.getAlgorithm());
-        }
-
-        int size = macKey.getEncoded().length * 8;
-        switch (size) {
-            case 256:
-                return AlgorithmIdentifiers.HMAC_SHA256;
-
-            case 384:
-                return AlgorithmIdentifiers.HMAC_SHA384;
-
-            case 512:
-                return AlgorithmIdentifiers.HMAC_SHA512;
-
-            default:
-                throw new IllegalArgumentException("Bad key size: " + size);
-        }
     }
 
     /**

@@ -18,6 +18,7 @@ import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
 
+import java.net.URI;
 import java.security.KeyPair;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
@@ -39,9 +40,9 @@ import org.shredzone.acme4j.challenge.Dns01Challenge;
 import org.shredzone.acme4j.challenge.Http01Challenge;
 import org.shredzone.acme4j.challenge.TlsAlpn01Challenge;
 import org.shredzone.acme4j.exception.AcmeException;
+import org.shredzone.acme4j.exception.AcmeServerException;
 import org.shredzone.acme4j.it.BammBammClient;
 import org.shredzone.acme4j.util.CSRBuilder;
-import org.shredzone.acme4j.util.CertificateUtils;
 
 /**
  * Tests a complete certificate order with different challenges.
@@ -61,10 +62,8 @@ public class OrderIT extends PebbleITBase {
             Http01Challenge challenge = auth.findChallenge(Http01Challenge.TYPE);
             assertThat(challenge, is(notNullValue()));
 
-            client.dnsAddARecord(TEST_DOMAIN, getBammBammHostname());
             client.httpAddToken(challenge.getToken(), challenge.getAuthorization());
 
-            cleanup(() -> client.dnsRemoveARecord(TEST_DOMAIN));
             cleanup(() -> client.httpRemoveToken(challenge.getToken()));
 
             return challenge;
@@ -82,7 +81,7 @@ public class OrderIT extends PebbleITBase {
             Dns01Challenge challenge = auth.findChallenge(Dns01Challenge.TYPE);
             assertThat(challenge, is(notNullValue()));
 
-            String challengeDomainName = "_acme-challenge." + TEST_DOMAIN;
+            String challengeDomainName = "_acme-challenge." + auth.getIdentifier().getDomain();
 
             client.dnsAddTxtRecord(challengeDomainName, challenge.getDigest());
 
@@ -103,16 +102,11 @@ public class OrderIT extends PebbleITBase {
             TlsAlpn01Challenge challenge = auth.findChallenge(TlsAlpn01Challenge.TYPE);
             assertThat(challenge, is(notNullValue()));
 
-            KeyPair challengeKey = createKeyPair();
+            client.tlsAlpnAddCertificate(
+                        auth.getIdentifier().getDomain(),
+                        challenge.getAuthorization());
 
-            X509Certificate cert = CertificateUtils.createTlsAlpn01Certificate(
-                        challengeKey, auth.getDomain(), challenge.getAcmeValidationV1());
-
-            client.dnsAddARecord(TEST_DOMAIN, getBammBammHostname());
-            client.tlsAlpnAddCertificate(auth.getDomain(), challengeKey.getPrivate(), cert);
-
-            cleanup(() -> client.dnsRemoveARecord(TEST_DOMAIN));
-            cleanup(() -> client.tlsAlpnRemoveCertificate(auth.getDomain()));
+            cleanup(() -> client.tlsAlpnRemoveCertificate(auth.getIdentifier().getDomain()));
 
             return challenge;
         }, OrderIT::standardRevoker);
@@ -129,10 +123,8 @@ public class OrderIT extends PebbleITBase {
             Http01Challenge challenge = auth.findChallenge(Http01Challenge.TYPE);
             assertThat(challenge, is(notNullValue()));
 
-            client.dnsAddARecord(TEST_DOMAIN, getBammBammHostname());
             client.httpAddToken(challenge.getToken(), challenge.getAuthorization());
 
-            cleanup(() -> client.dnsRemoveARecord(TEST_DOMAIN));
             cleanup(() -> client.httpRemoveToken(challenge.getToken()));
 
             return challenge;
@@ -175,7 +167,7 @@ public class OrderIT extends PebbleITBase {
         assertThat(order.getStatus(), is(Status.PENDING));
 
         for (Authorization auth : order.getAuthorizations()) {
-            assertThat(auth.getDomain(), is(domain));
+            assertThat(auth.getIdentifier().getDomain(), is(domain));
             assertThat(auth.getStatus(), is(Status.PENDING));
 
             if (auth.getStatus() == Status.VALID) {
@@ -189,7 +181,7 @@ public class OrderIT extends PebbleITBase {
                 .pollInterval(1, SECONDS)
                 .timeout(30, SECONDS)
                 .conditionEvaluationListener(cond -> updateAuth(auth))
-                .until(auth::getStatus, not(isOneOf(Status.PENDING, Status.PROCESSING)));
+                .until(auth::getStatus, not(oneOf(Status.PENDING, Status.PROCESSING)));
 
             if (auth.getStatus() != Status.VALID) {
                 fail("Authorization failed");
@@ -207,7 +199,7 @@ public class OrderIT extends PebbleITBase {
             .pollInterval(1, SECONDS)
             .timeout(30, SECONDS)
             .conditionEvaluationListener(cond -> updateOrder(order))
-            .until(order::getStatus, not(isOneOf(Status.PENDING, Status.PROCESSING, Status.READY)));
+            .until(order::getStatus, not(oneOf(Status.PENDING, Status.PROCESSING, Status.READY)));
 
         if (order.getStatus() != Status.VALID) {
             fail("Order failed");
@@ -220,6 +212,12 @@ public class OrderIT extends PebbleITBase {
         assertThat(cert.getNotBefore(), not(nullValue()));
         assertThat(cert.getSubjectX500Principal().getName(), containsString("CN=" + domain));
 
+        for (Authorization auth :  order.getAuthorizations()) {
+            assertThat(auth.getStatus(), is(Status.VALID));
+            auth.deactivate();
+            assertThat(auth.getStatus(), is(Status.DEACTIVATED));
+        }
+
         revoker.revoke(session, certificate, keyPair, domainKeyPair);
 
         // Make sure certificate is revoked
@@ -230,6 +228,14 @@ public class OrderIT extends PebbleITBase {
             fail("Could download revoked cert");
         } catch (AcmeException ex) {
             assertThat(ex.getMessage(), is("HTTP 404: Not Found"));
+        }
+
+        // Try to revoke again
+        try {
+            certificate.revoke();
+            fail("Could revoke again");
+        } catch (AcmeServerException ex) {
+            assertThat(ex.getProblem().getType(), is(URI.create("urn:ietf:params:acme:error:alreadyRevoked")));
         }
     }
 

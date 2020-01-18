@@ -20,7 +20,7 @@
     <parent>
         <groupId>org.shredzone.acme4j</groupId>
         <artifactId>acme4j</artifactId>
-        <version>2.3-SNAPSHOT</version>
+        <version>2.9-SNAPSHOT</version>
     </parent>
 
     <artifactId>acme4j-example</artifactId>
@@ -30,12 +30,22 @@
 
     <properties>
         <!-- I prefer readability over maintainability in the examples... -->
-        <sonar.skip>true</sonar.skip>
         <spotbugs.skip>true</spotbugs.skip>
     </properties>
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Automatic-Module-Name>org.shredzone.acme4j.example</Automatic-Module-Name>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>

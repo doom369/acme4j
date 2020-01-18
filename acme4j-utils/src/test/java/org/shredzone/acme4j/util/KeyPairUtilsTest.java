@@ -30,8 +30,6 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import com.jcabi.matchers.RegexMatchers;
-
 /**
  * Unit tests for {@link KeyPairUtils}.
  */
@@ -42,6 +40,19 @@ public class KeyPairUtilsTest {
     @BeforeClass
     public static void setup() {
         Security.addProvider(new BouncyCastleProvider());
+    }
+
+    /**
+     * Test that standard keypair generates a secure key pair.
+     */
+    @Test
+    public void testCreateStandardKeyPair() {
+        KeyPair pair = KeyPairUtils.createKeyPair();
+        assertThat(pair, is(notNullValue()));
+        assertThat(pair.getPublic(), is(instanceOf(ECPublicKey.class)));
+        ECPublicKey pk = (ECPublicKey) pair.getPublic();
+        assertThat(pk.getAlgorithm(), is("ECDSA"));
+        assertThat(pk.getParams().getCurve().getField().getFieldSize(), is(384));
     }
 
     /**
@@ -73,7 +84,7 @@ public class KeyPairUtilsTest {
         }
 
         // Make sure PEM file is properly formatted
-        assertThat(pem, RegexMatchers.matchesPattern(
+        assertThat(pem, matchesPattern(
                   "-----BEGIN RSA PRIVATE KEY-----[\\r\\n]+"
                 + "([a-zA-Z0-9/+=]+[\\r\\n]+)+"
                 + "-----END RSA PRIVATE KEY-----[\\r\\n]*"));
@@ -116,7 +127,7 @@ public class KeyPairUtilsTest {
         }
 
         // Make sure PEM file is properly formatted
-        assertThat(pem, RegexMatchers.matchesPattern(
+        assertThat(pem, matchesPattern(
                   "-----BEGIN EC PRIVATE KEY-----[\\r\\n]+"
                 + "([a-zA-Z0-9/+=]+[\\r\\n]+)+"
                 + "-----END EC PRIVATE KEY-----[\\r\\n]*"));

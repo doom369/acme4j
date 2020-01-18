@@ -17,8 +17,10 @@ import static org.shredzone.acme4j.toolbox.AcmeUtils.base64UrlEncode;
 
 import java.security.Key;
 import java.security.PublicKey;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -28,10 +30,6 @@ import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 
 import org.jose4j.json.JsonUtil;
-import org.jose4j.jwk.JsonWebKey;
-import org.jose4j.jwk.PublicJsonWebKey;
-import org.jose4j.lang.JoseException;
-import org.shredzone.acme4j.exception.AcmeProtocolException;
 
 /**
  * Builder for JSON structures.
@@ -84,6 +82,27 @@ public class JSONBuilder {
     }
 
     /**
+     * Puts a {@link Duration} to the JSON. If a property with the key exists, it will be
+     * replaced.
+     *
+     * @param key
+     *            Property key
+     * @param value
+     *            Property {@link Duration} value
+     * @return {@code this}
+     * @since 2.3
+     */
+    public JSONBuilder put(String key, @Nullable Duration value) {
+        if (value == null) {
+            put(key, (Object) null);
+            return this;
+        }
+
+        put(key, value.getSeconds());
+        return this;
+    }
+
+    /**
      * Puts binary data to the JSON. The data is base64 url encoded.
      *
      * @param key
@@ -108,14 +127,8 @@ public class JSONBuilder {
     public JSONBuilder putKey(String key, PublicKey publickey) {
         Objects.requireNonNull(publickey, "publickey");
 
-        try {
-            final PublicJsonWebKey jwk = PublicJsonWebKey.Factory.newPublicJwk(publickey);
-            Map<String, Object> jwkParams = jwk.toParams(JsonWebKey.OutputControlLevel.PUBLIC_ONLY);
-            object(key).data.putAll(jwkParams);
-            return this;
-        } catch (JoseException ex) {
-            throw new AcmeProtocolException("Invalid key", ex);
-        }
+        data.put(key, JoseUtils.publicKeyToJWK(publickey));
+        return this;
     }
 
     /**
@@ -137,10 +150,10 @@ public class JSONBuilder {
      * @param key
      *            Property key
      * @param values
-     *            Array of property values
+     *            Collection of property values
      * @return {@code this}
      */
-    public JSONBuilder array(String key, Object... values) {
+    public JSONBuilder array(String key, Collection<?> values) {
         data.put(key, values);
         return this;
     }

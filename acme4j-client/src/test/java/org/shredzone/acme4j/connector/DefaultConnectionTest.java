@@ -13,8 +13,11 @@
  */
 package org.shredzone.acme4j.connector;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.fail;
+import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.*;
 import static org.shredzone.acme4j.toolbox.TestUtils.url;
 import static uk.co.datumedge.hamcrest.json.SameJSONAs.sameJSONAs;
@@ -24,7 +27,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
-import java.net.Proxy;
 import java.net.URI;
 import java.net.URL;
 import java.security.KeyPair;
@@ -33,13 +35,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import org.jose4j.base64url.Base64Url;
 import org.jose4j.jws.JsonWebSignature;
 import org.jose4j.jwx.CompactSerializer;
 import org.junit.Before;
@@ -65,8 +67,12 @@ import org.shredzone.acme4j.toolbox.TestUtils;
  */
 public class DefaultConnectionTest {
 
+    private static final Base64.Encoder URL_ENCODER = Base64.getUrlEncoder().withoutPadding();
+    private static final Base64.Decoder URL_DECODER = Base64.getUrlDecoder();
+
     private URL requestUrl = TestUtils.url("http://example.com/acme/");
     private URL accountUrl = TestUtils.url(TestUtils.ACCOUNT_URL);
+    private NetworkSettings settings = new NetworkSettings();
     private HttpURLConnection mockUrlConnection;
     private HttpConnector mockHttpConnection;
     private Session session;
@@ -78,7 +84,7 @@ public class DefaultConnectionTest {
         mockUrlConnection = mock(HttpURLConnection.class);
 
         mockHttpConnection = mock(HttpConnector.class);
-        when(mockHttpConnection.openConnection(requestUrl, Proxy.NO_PROXY)).thenReturn(mockUrlConnection);
+        when(mockHttpConnection.openConnection(same(requestUrl), any())).thenReturn(mockUrlConnection);
 
         final AcmeProvider mockProvider = mock(AcmeProvider.class);
         when(mockProvider.directory(
@@ -158,7 +164,7 @@ public class DefaultConnectionTest {
      */
     @Test
     public void testResetNonce() throws AcmeException, IOException {
-        when(mockHttpConnection.openConnection(new URL("https://example.com/acme/new-nonce"), Proxy.NO_PROXY))
+        when(mockHttpConnection.openConnection(eq(new URL("https://example.com/acme/new-nonce")), any()))
                 .thenReturn(mockUrlConnection);
         when(mockUrlConnection.getResponseCode())
                 .thenReturn(HttpURLConnection.HTTP_NO_CONTENT);
@@ -188,6 +194,7 @@ public class DefaultConnectionTest {
         verify(mockUrlConnection, atLeastOnce()).connect();
         verify(mockUrlConnection, atLeastOnce()).getResponseCode();
         verify(mockUrlConnection, atLeastOnce()).getHeaderField("Replay-Nonce");
+        verify(mockUrlConnection, atLeastOnce()).getHeaderFields();
         verifyNoMoreInteractions(mockUrlConnection);
     }
 
@@ -498,7 +505,7 @@ public class DefaultConnectionTest {
         String jsonData = "{\"type\":\"urn:ietf:params:acme:error:rateLimited\",\"detail\":\"Too many invocations\"}";
 
         Map<String, List<String>> linkHeader = new HashMap<>();
-        linkHeader.put("Link", Arrays.asList("<https://example.com/rates.pdf>; rel=\"urn:ietf:params:acme:documentation\""));
+        linkHeader.put("Link", Arrays.asList("<https://example.com/rates.pdf>; rel=\"help\""));
 
         Instant retryAfter = Instant.now().plusSeconds(30L).truncatedTo(ChronoUnit.MILLIS);
 
@@ -602,7 +609,7 @@ public class DefaultConnectionTest {
             conn.sendSignedRequest(requestUrl, new JSONBuilder(), login);
             fail("Expected to fail");
         } catch (AcmeProtocolException ex) {
-            assertThat(ex.getMessage(), not(isEmptyOrNullString()));
+            assertThat(ex.getMessage(), not(emptyOrNullString()));
         } catch (AcmeException ex) {
             fail("Did not expect an AcmeException");
         }
@@ -647,11 +654,17 @@ public class DefaultConnectionTest {
     public void testSendRequest() throws Exception {
         when(mockUrlConnection.getResponseCode()).thenReturn(HttpURLConnection.HTTP_OK);
 
-        try (DefaultConnection conn = new DefaultConnection(mockHttpConnection)) {
+        try (DefaultConnection conn = new DefaultConnection(mockHttpConnection) {
+            @Override
+            public String getNonce() {
+                return null;
+            }
+        }) {
             conn.sendRequest(requestUrl, session);
         }
 
         verify(mockUrlConnection).setRequestMethod("GET");
+        verify(mockUrlConnection).setRequestProperty("Accept", "application/json");
         verify(mockUrlConnection).setRequestProperty("Accept-Charset", "utf-8");
         verify(mockUrlConnection).setRequestProperty("Accept-Language", "ja-JP");
         verify(mockUrlConnection).setDoOutput(false);
@@ -666,8 +679,8 @@ public class DefaultConnectionTest {
      */
     @Test
     public void testSendSignedRequest() throws Exception {
-        final String nonce1 = Base64Url.encode("foo-nonce-1-foo".getBytes());
-        final String nonce2 = Base64Url.encode("foo-nonce-2-foo".getBytes());
+        final String nonce1 = URL_ENCODER.encodeToString("foo-nonce-1-foo".getBytes());
+        final String nonce2 = URL_ENCODER.encodeToString("foo-nonce-2-foo".getBytes());
         final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 
         when(mockUrlConnection.getResponseCode()).thenReturn(HttpURLConnection.HTTP_OK);
@@ -726,9 +739,9 @@ public class DefaultConnectionTest {
         expectedHeader.append("\"kid\":\"").append(accountUrl).append('"');
         expectedHeader.append('}');
 
-        assertThat(Base64Url.decodeToUtf8String(encodedHeader), sameJSONAs(expectedHeader.toString()));
-        assertThat(Base64Url.decodeToUtf8String(encodedPayload), sameJSONAs("{\"foo\":123,\"bar\":\"a-string\"}"));
-        assertThat(encodedSignature, not(isEmptyOrNullString()));
+        assertThat(new String(URL_DECODER.decode(encodedHeader), UTF_8), sameJSONAs(expectedHeader.toString()));
+        assertThat(new String(URL_DECODER.decode(encodedPayload), UTF_8), sameJSONAs("{\"foo\":123,\"bar\":\"a-string\"}"));
+        assertThat(encodedSignature, not(emptyOrNullString()));
 
         JsonWebSignature jws = new JsonWebSignature();
         jws.setCompactSerialization(CompactSerializer.serialize(encodedHeader, encodedPayload, encodedSignature));
@@ -737,12 +750,136 @@ public class DefaultConnectionTest {
     }
 
     /**
+     * Test signed POST-as-GET requests.
+     */
+    @Test
+    public void testSendSignedPostAsGetRequest() throws Exception {
+        final String nonce1 = URL_ENCODER.encodeToString("foo-nonce-1-foo".getBytes());
+        final String nonce2 = URL_ENCODER.encodeToString("foo-nonce-2-foo".getBytes());
+        final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+
+        when(mockUrlConnection.getResponseCode()).thenReturn(HttpURLConnection.HTTP_OK);
+        when(mockUrlConnection.getOutputStream()).thenReturn(outputStream);
+
+        try (DefaultConnection conn = new DefaultConnection(mockHttpConnection) {
+            @Override
+            public void resetNonce(Session session) {
+                assertThat(session, is(sameInstance(DefaultConnectionTest.this.session)));
+                if (session.getNonce() == null) {
+                    session.setNonce(nonce1);
+                } else {
+                    fail("unknown nonce");
+                }
+            }
+
+            @Override
+            public String getNonce() {
+                assertThat(session, is(sameInstance(DefaultConnectionTest.this.session)));
+                if (session.getNonce() == nonce1) {
+                    return nonce2;
+                } else {
+                    fail("unknown nonce");
+                    return null;
+                }
+            }
+        }) {
+            conn.sendSignedPostAsGetRequest(requestUrl, login);
+        }
+
+        verify(mockUrlConnection).setRequestMethod("POST");
+        verify(mockUrlConnection).setRequestProperty("Accept", "application/json");
+        verify(mockUrlConnection).setRequestProperty("Accept-Charset", "utf-8");
+        verify(mockUrlConnection).setRequestProperty("Accept-Language", "ja-JP");
+        verify(mockUrlConnection).setRequestProperty("Content-Type", "application/jose+json");
+        verify(mockUrlConnection).connect();
+        verify(mockUrlConnection).setDoOutput(true);
+        verify(mockUrlConnection).setFixedLengthStreamingMode(outputStream.toByteArray().length);
+        verify(mockUrlConnection).getResponseCode();
+        verify(mockUrlConnection).getOutputStream();
+        verify(mockUrlConnection, atLeast(0)).getHeaderFields();
+        verifyNoMoreInteractions(mockUrlConnection);
+
+        JSON data = JSON.parse(new String(outputStream.toByteArray(), "utf-8"));
+        String encodedHeader = data.get("protected").asString();
+        String encodedSignature = data.get("signature").asString();
+        String encodedPayload = data.get("payload").asString();
+
+        StringBuilder expectedHeader = new StringBuilder();
+        expectedHeader.append('{');
+        expectedHeader.append("\"nonce\":\"").append(nonce1).append("\",");
+        expectedHeader.append("\"url\":\"").append(requestUrl).append("\",");
+        expectedHeader.append("\"alg\":\"RS256\",");
+        expectedHeader.append("\"kid\":\"").append(accountUrl).append('"');
+        expectedHeader.append('}');
+
+        assertThat(new String(URL_DECODER.decode(encodedHeader), UTF_8), sameJSONAs(expectedHeader.toString()));
+        assertThat(new String(URL_DECODER.decode(encodedPayload), UTF_8), is(""));
+        assertThat(encodedSignature, not(emptyOrNullString()));
+
+        JsonWebSignature jws = new JsonWebSignature();
+        jws.setCompactSerialization(CompactSerializer.serialize(encodedHeader, encodedPayload, encodedSignature));
+        jws.setKey(login.getKeyPair().getPublic());
+        assertThat(jws.verifySignature(), is(true));
+    }
+
+    /**
+     * Test certificate POST-as-GET requests.
+     */
+    @Test
+    public void testSendCertificateRequest() throws Exception {
+        final String nonce1 = URL_ENCODER.encodeToString("foo-nonce-1-foo".getBytes());
+        final String nonce2 = URL_ENCODER.encodeToString("foo-nonce-2-foo".getBytes());
+        final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+
+        when(mockUrlConnection.getResponseCode()).thenReturn(HttpURLConnection.HTTP_OK);
+        when(mockUrlConnection.getOutputStream()).thenReturn(outputStream);
+
+        try (DefaultConnection conn = new DefaultConnection(mockHttpConnection) {
+            @Override
+            public void resetNonce(Session session) {
+                assertThat(session, is(sameInstance(DefaultConnectionTest.this.session)));
+                if (session.getNonce() == null) {
+                    session.setNonce(nonce1);
+                } else {
+                    fail("unknown nonce");
+                }
+            }
+
+            @Override
+            public String getNonce() {
+                assertThat(session, is(sameInstance(DefaultConnectionTest.this.session)));
+                if (session.getNonce() == nonce1) {
+                    return nonce2;
+                } else {
+                    fail("unknown nonce");
+                    return null;
+                }
+            }
+        }) {
+            conn.sendCertificateRequest(requestUrl, login);
+        }
+
+        verify(mockUrlConnection).setRequestMethod("POST");
+        verify(mockUrlConnection).setRequestProperty("Accept", "application/pem-certificate-chain");
+        verify(mockUrlConnection).setRequestProperty("Accept-Charset", "utf-8");
+        verify(mockUrlConnection).setRequestProperty("Accept-Language", "ja-JP");
+        verify(mockUrlConnection).setRequestProperty("Content-Type", "application/jose+json");
+        verify(mockUrlConnection).setDoOutput(true);
+        verify(mockUrlConnection).connect();
+        verify(mockUrlConnection).setFixedLengthStreamingMode(outputStream.toByteArray().length);
+        verify(mockUrlConnection).getResponseCode();
+        verify(mockUrlConnection).getOutputStream();
+        verify(mockUrlConnection, atLeast(0)).getHeaderFields();
+        verifyNoMoreInteractions(mockUrlConnection);
+    }
+
+    /**
      * Test signed POST requests without KeyIdentifier.
      */
     @Test
     public void testSendSignedRequestNoKid() throws Exception {
-        final String nonce1 = Base64Url.encode("foo-nonce-1-foo".getBytes());
-        final String nonce2 = Base64Url.encode("foo-nonce-2-foo".getBytes());
+        final String nonce1 = URL_ENCODER.encodeToString("foo-nonce-1-foo".getBytes());
+        final String nonce2 = URL_ENCODER.encodeToString("foo-nonce-2-foo".getBytes());
         final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 
         when(mockUrlConnection.getResponseCode()).thenReturn(HttpURLConnection.HTTP_OK);
@@ -804,9 +941,9 @@ public class DefaultConnectionTest {
         expectedHeader.append("\"n\":\"").append(TestUtils.N).append("\"");
         expectedHeader.append("}}");
 
-        assertThat(Base64Url.decodeToUtf8String(encodedHeader), sameJSONAs(expectedHeader.toString()));
-        assertThat(Base64Url.decodeToUtf8String(encodedPayload), sameJSONAs("{\"foo\":123,\"bar\":\"a-string\"}"));
-        assertThat(encodedSignature, not(isEmptyOrNullString()));
+        assertThat(new String(URL_DECODER.decode(encodedHeader), UTF_8), sameJSONAs(expectedHeader.toString()));
+        assertThat(new String(URL_DECODER.decode(encodedPayload), UTF_8), sameJSONAs("{\"foo\":123,\"bar\":\"a-string\"}"));
+        assertThat(encodedSignature, not(emptyOrNullString()));
 
         JsonWebSignature jws = new JsonWebSignature();
         jws.setCompactSerialization(CompactSerializer.serialize(encodedHeader, encodedPayload, encodedSignature));
@@ -819,7 +956,7 @@ public class DefaultConnectionTest {
      */
     @Test(expected = AcmeException.class)
     public void testSendSignedRequestNoNonce() throws Exception {
-        when(mockHttpConnection.openConnection(new URL("https://example.com/acme/new-nonce"), Proxy.NO_PROXY))
+        when(mockHttpConnection.openConnection(eq(new URL("https://example.com/acme/new-nonce")), any()))
                 .thenReturn(mockUrlConnection);
         when(mockUrlConnection.getResponseCode())
                 .thenReturn(HttpURLConnection.HTTP_NOT_FOUND);
@@ -879,7 +1016,7 @@ public class DefaultConnectionTest {
         assertThat(downloaded.size(), is(original.size()));
         for (int ix = 0; ix < downloaded.size(); ix++) {
             assertThat(downloaded.get(ix).getEncoded(), is(original.get(ix).getEncoded()));
-        };
+        }
 
         verify(mockUrlConnection).getHeaderField("Content-Type");
         verify(mockUrlConnection).getInputStream();

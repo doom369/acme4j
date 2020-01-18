@@ -31,21 +31,6 @@ import org.shredzone.acme4j.exception.AcmeException;
 public class SessionIT extends PebbleITBase {
 
     @Test
-    public void testNonce() throws AcmeException {
-        Session session = new Session(pebbleURI());
-
-        // No nonce yet on a fresh session
-        assertThat(session.getNonce(), is(nullValue()));
-
-        // Request directory, also providing a nonce
-        session.getMetadata();
-
-        // A nonce must be set now
-        assertThat(session.getNonce(), not(nullValue()));
-        assertThat(session.provider(), not(nullValue()));
-    }
-
-    @Test
     public void testResources() throws AcmeException {
         Session session = new Session(pebbleURI());
 
@@ -65,7 +50,8 @@ public class SessionIT extends PebbleITBase {
         assertThat(meta.getWebsite(), is(nullValue()));
         assertThat(meta.getCaaIdentities(), is(empty()));
         assertThat(meta.getJSON().toString(), sameJSONAs("{"
-                        + "'termsOfService': 'data:text/plain,Do%20what%20thou%20wilt'"
+                        + "'termsOfService': 'data:text/plain,Do%20what%20thou%20wilt',"
+                        + "'externalAccountRequired': false"
                         + "}"));
     }
 

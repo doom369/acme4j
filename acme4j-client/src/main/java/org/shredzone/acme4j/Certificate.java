@@ -50,8 +50,8 @@ public class Certificate extends AcmeResource {
     private static final long serialVersionUID = 7381527770159084201L;
     private static final Logger LOG = LoggerFactory.getLogger(Certificate.class);
 
-    private ArrayList<X509Certificate> certChain = null;
-    private ArrayList<URL> alternates = null;
+    private ArrayList<X509Certificate> certChain;
+    private ArrayList<URL> alternates;
 
     protected Certificate(Login login, URL certUrl) {
         super(login, certUrl);
@@ -70,8 +70,8 @@ public class Certificate extends AcmeResource {
     public void download() throws AcmeException {
         if (certChain == null) {
             LOG.debug("download");
-            try (Connection conn = connect()) {
-                conn.sendRequest(getLocation(), getSession());
+            try (Connection conn = getSession().connect()) {
+                conn.sendCertificateRequest(getLocation(), getLogin());
                 alternates = new ArrayList<>(conn.getLinks("alternate"));
                 certChain = new ArrayList<>(conn.readCertificates());
             }
@@ -147,17 +147,42 @@ public class Certificate extends AcmeResource {
      *            reason.
      */
     public void revoke(@Nullable RevocationReason reason) throws AcmeException {
-        LOG.debug("revoke");
-        URL resUrl = getSession().resourceUrl(Resource.REVOKE_CERT);
+        revoke(getLogin(), getCertificate(), reason);
+    }
 
-        try (Connection conn = connect()) {
+    /**
+     * Revoke a certificate. This call is meant to be used for revoking certificates if
+     * only the account's key pair and the certificate itself is available.
+     *
+     * @param login
+     *            {@link Login} to the account
+     * @param cert
+     *            The {@link X509Certificate} to be revoked
+     * @param reason
+     *            {@link RevocationReason} stating the reason of the revocation that is
+     *            used when generating OCSP responses and CRLs. {@code null} to give no
+     *            reason.
+     * @since 2.6
+     */
+    public static void revoke(Login login, X509Certificate cert, @Nullable RevocationReason reason)
+                throws AcmeException {
+        LOG.debug("revoke");
+
+        Session session = login.getSession();
+
+        URL resUrl = session.resourceUrl(Resource.REVOKE_CERT);
+        if (resUrl == null) {
+            throw new AcmeException("Server does not allow certificate revocation");
+        }
+
+        try (Connection conn = session.connect()) {
             JSONBuilder claims = new JSONBuilder();
-            claims.putBase64("certificate", getCertificate().getEncoded());
+            claims.putBase64("certificate", cert.getEncoded());
             if (reason != null) {
                 claims.put("reason", reason.getReasonCode());
             }
 
-            conn.sendSignedRequest(resUrl, claims, getLogin());
+            conn.sendSignedRequest(resUrl, claims, login);
         } catch (CertificateEncodingException ex) {
             throw new AcmeProtocolException("Invalid certificate", ex);
         }
@@ -180,14 +205,14 @@ public class Certificate extends AcmeResource {
      */
     public static void revoke(Session session, KeyPair domainKeyPair, X509Certificate cert,
             @Nullable RevocationReason reason) throws AcmeException {
-        LOG.debug("revoke immediately");
+        LOG.debug("revoke using the domain key pair");
 
         URL resUrl = session.resourceUrl(Resource.REVOKE_CERT);
         if (resUrl == null) {
             throw new AcmeException("Server does not allow certificate revocation");
         }
 
-        try (Connection conn = session.provider().connect()) {
+        try (Connection conn = session.connect()) {
             JSONBuilder claims = new JSONBuilder();
             claims.putBase64("certificate", cert.getEncoded());
             if (reason != null) {

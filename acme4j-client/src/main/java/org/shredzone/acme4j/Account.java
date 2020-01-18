@@ -14,7 +14,6 @@
 package org.shredzone.acme4j;
 
 import static java.util.stream.Collectors.toList;
-import static org.shredzone.acme4j.toolbox.AcmeUtils.*;
 
 import java.net.URI;
 import java.net.URL;
@@ -29,9 +28,6 @@ import java.util.Objects;
 import javax.annotation.CheckForNull;
 import javax.annotation.ParametersAreNonnullByDefault;
 
-import org.jose4j.jwk.PublicJsonWebKey;
-import org.jose4j.jws.JsonWebSignature;
-import org.jose4j.lang.JoseException;
 import org.shredzone.acme4j.connector.Connection;
 import org.shredzone.acme4j.connector.Resource;
 import org.shredzone.acme4j.connector.ResourceIterator;
@@ -42,6 +38,7 @@ import org.shredzone.acme4j.toolbox.AcmeUtils;
 import org.shredzone.acme4j.toolbox.JSON;
 import org.shredzone.acme4j.toolbox.JSON.Value;
 import org.shredzone.acme4j.toolbox.JSONBuilder;
+import org.shredzone.acme4j.toolbox.JoseUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -57,6 +54,7 @@ public class Account extends AcmeJsonResource {
     private static final String KEY_ORDERS = "orders";
     private static final String KEY_CONTACT = "contact";
     private static final String KEY_STATUS = "status";
+    private static final String KEY_EXTERNAL_ACCOUNT_BINDING = "externalAccountBinding";
 
     protected Account(Login login) {
         super(login, login.getAccountLocation());
@@ -95,6 +93,30 @@ public class Account extends AcmeJsonResource {
     }
 
     /**
+     * Returns {@code true} if the account is bound to an external non-ACME account.
+     *
+     * @since 2.8
+     */
+    public boolean hasExternalAccountBinding() {
+        return getJSON().contains(KEY_EXTERNAL_ACCOUNT_BINDING);
+    }
+
+    /**
+     * Returns the key identifier of the external non-ACME account. If this account is
+     * not bound to an external account, {@code null} is returned instead.
+     *
+     * @since 2.8
+     */
+    @CheckForNull
+    public String getKeyIdentifier() {
+        return getJSON().get(KEY_EXTERNAL_ACCOUNT_BINDING)
+                .optional().map(Value::asObject)
+                .map(j -> j.get("protected")).map(Value::asEncodedObject)
+                .map(j -> j.get("kid")).map(Value::asString)
+                .orElse(null);
+    }
+
+    /**
      * Returns an {@link Iterator} of all {@link Order} belonging to this {@link Account}.
      * <p>
      * Using the iterator will initiate one or more requests to the ACME server.
@@ -108,18 +130,6 @@ public class Account extends AcmeJsonResource {
     public Iterator<Order> getOrders() {
         URL ordersUrl = getJSON().get(KEY_ORDERS).asURL();
         return new ResourceIterator<>(getLogin(), KEY_ORDERS, ordersUrl, Login::bindOrder);
-    }
-
-    @Override
-    public void update() throws AcmeException {
-        LOG.debug("update Account");
-        try (Connection conn = connect()) {
-            conn.sendSignedRequest(getLocation(), new JSONBuilder(), getLogin());
-            JSON json = conn.readJsonResponse();
-            if (json != null) {
-                setJSON(json);
-            }
-        }
     }
 
     /**
@@ -154,15 +164,36 @@ public class Account extends AcmeJsonResource {
         if (domain.isEmpty()) {
             throw new IllegalArgumentException("domain must not be empty");
         }
+        return preAuthorize(Identifier.dns(domain));
+    }
+
+    /**
+     * Pre-authorizes an {@link Identifier}. The CA will check if it accepts the
+     * identifier for certification, and returns the necessary challenges.
+     * <p>
+     * Some servers may not allow pre-authorization.
+     * <p>
+     * It is not possible to pre-authorize wildcard domains.
+     *
+     * @param identifier
+     *            {@link Identifier} to be pre-authorized.
+     * @return {@link Authorization} object for this identifier
+     * @throws AcmeException
+     *             if the server does not allow pre-authorization
+     * @throws AcmeServerException
+     *             if the server allows pre-authorization, but will refuse to issue a
+     *             certificate for this identifier
+     * @since 2.3
+     */
+    public Authorization preAuthorize(Identifier identifier) throws AcmeException {
+        Objects.requireNonNull(identifier, "identifier");
 
         URL newAuthzUrl = getSession().resourceUrl(Resource.NEW_AUTHZ);
 
-        LOG.debug("preAuthorizeDomain {}", domain);
-        try (Connection conn = connect()) {
+        LOG.debug("preAuthorize {}", identifier);
+        try (Connection conn = getSession().connect()) {
             JSONBuilder claims = new JSONBuilder();
-            claims.object("identifier")
-                    .put("type", "dns")
-                    .put("value", toAce(domain));
+            claims.put("identifier", identifier.toMap());
 
             conn.sendSignedRequest(newAuthzUrl, claims, getLogin());
 
@@ -172,10 +203,7 @@ public class Account extends AcmeJsonResource {
             }
 
             Authorization auth = getLogin().bindAuthorization(authLocation);
-            JSON json = conn.readJsonResponse();
-            if (json != null) {
-                auth.setJSON(json);
-            }
+            auth.setJSON(conn.readJsonResponse());
             return auth;
         }
     }
@@ -198,32 +226,19 @@ public class Account extends AcmeJsonResource {
 
         LOG.debug("key-change");
 
-        try (Connection conn = connect()) {
+        try (Connection conn = getSession().connect()) {
             URL keyChangeUrl = getSession().resourceUrl(Resource.KEY_CHANGE);
-            PublicJsonWebKey newKeyJwk = PublicJsonWebKey.Factory.newPublicJwk(newKeyPair.getPublic());
 
             JSONBuilder payloadClaim = new JSONBuilder();
             payloadClaim.put("account", getLocation());
             payloadClaim.putKey("oldKey", getLogin().getKeyPair().getPublic());
 
-            JsonWebSignature innerJws = new JsonWebSignature();
-            innerJws.setPayload(payloadClaim.toString());
-            innerJws.getHeaders().setObjectHeaderValue("url", keyChangeUrl);
-            innerJws.getHeaders().setJwkHeaderValue("jwk", newKeyJwk);
-            innerJws.setAlgorithmHeaderValue(keyAlgorithm(newKeyJwk));
-            innerJws.setKey(newKeyPair.getPrivate());
-            innerJws.sign();
+            JSONBuilder jose = JoseUtils.createJoseRequest(keyChangeUrl, newKeyPair,
+                    payloadClaim, null, null);
 
-            JSONBuilder outerClaim = new JSONBuilder();
-            outerClaim.put("protected", innerJws.getHeaders().getEncodedHeader());
-            outerClaim.put("signature", innerJws.getEncodedSignature());
-            outerClaim.put("payload", innerJws.getEncodedPayload());
-
-            conn.sendSignedRequest(keyChangeUrl, outerClaim, getLogin());
+            conn.sendSignedRequest(keyChangeUrl, jose, getLogin());
 
             getLogin().setKeyPair(newKeyPair);
-        } catch (JoseException ex) {
-            throw new AcmeProtocolException("Cannot sign key-change", ex);
         }
     }
 
@@ -235,16 +250,12 @@ public class Account extends AcmeJsonResource {
      */
     public void deactivate() throws AcmeException {
         LOG.debug("deactivate");
-        try (Connection conn = connect()) {
+        try (Connection conn = getSession().connect()) {
             JSONBuilder claims = new JSONBuilder();
             claims.put(KEY_STATUS, "deactivated");
 
             conn.sendSignedRequest(getLocation(), claims, getLogin());
-
-            JSON json = conn.readJsonResponse();
-            if (json != null) {
-                setJSON(json);
-            }
+            setJSON(conn.readJsonResponse());
         }
     }
 
@@ -323,18 +334,14 @@ public class Account extends AcmeJsonResource {
          */
         public void commit() throws AcmeException {
             LOG.debug("modify/commit");
-            try (Connection conn = connect()) {
+            try (Connection conn = getSession().connect()) {
                 JSONBuilder claims = new JSONBuilder();
                 if (!editContacts.isEmpty()) {
                     claims.put(KEY_CONTACT, editContacts);
                 }
 
                 conn.sendSignedRequest(getLocation(), claims, getLogin());
-
-                JSON json = conn.readJsonResponse();
-                if (json != null) {
-                    setJSON(json);
-                }
+                setJSON(conn.readJsonResponse());
             }
         }
     }

@@ -14,17 +14,16 @@
 package org.shredzone.acme4j;
 
 import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.*;
 import static org.shredzone.acme4j.toolbox.TestUtils.*;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Proxy;
-import java.net.Proxy.Type;
 import java.net.URI;
 import java.net.URL;
 import java.security.KeyPair;
+import java.time.Duration;
 import java.time.Instant;
 
 import org.junit.Test;
@@ -32,6 +31,7 @@ import org.mockito.ArgumentMatchers;
 import org.shredzone.acme4j.connector.Resource;
 import org.shredzone.acme4j.exception.AcmeException;
 import org.shredzone.acme4j.provider.AcmeProvider;
+import org.shredzone.acme4j.provider.GenericAcmeProvider;
 import org.shredzone.acme4j.toolbox.TestUtils;
 
 /**
@@ -61,9 +61,20 @@ public class SessionTest {
         assertThat(session2, not(nullValue()));
         assertThat(session2.getServerUri(), is(serverUri));
 
+        Session session3 = new Session(serverUri, new GenericAcmeProvider());
+        assertThat(session3, not(nullValue()));
+        assertThat(session3.getServerUri(), is(serverUri));
+
         try {
             new Session("#*aBaDuRi*#");
             fail("accepted bad URI in constructor");
+        } catch (IllegalArgumentException ex) {
+            // expected
+        }
+
+        try {
+            new Session(URI.create("acme://invalid"), new GenericAcmeProvider());
+            fail("Provider accepted unsupported URI");
         } catch (IllegalArgumentException ex) {
             // expected
         }
@@ -82,14 +93,8 @@ public class SessionTest {
         session.setNonce(DUMMY_NONCE);
         assertThat(session.getNonce(), is(equalTo(DUMMY_NONCE)));
 
-        assertThat(session.getProxy(), is(Proxy.NO_PROXY));
-        Proxy proxy = new Proxy(Type.HTTP, new InetSocketAddress("10.0.0.1", 8080));
-        session.setProxy(proxy);
-        assertThat(session.getProxy(), is(proxy));
-        session.setProxy(null);
-        assertThat(session.getProxy(), is(Proxy.NO_PROXY));
-
         assertThat(session.getServerUri(), is(serverUri));
+        assertThat(session.networkSettings(), is(notNullValue()));
     }
 
     /**
@@ -127,7 +132,7 @@ public class SessionTest {
             @Override
             public AcmeProvider provider() {
                 return mockProvider;
-            };
+            }
         };
 
         assertSession(session);
@@ -164,7 +169,7 @@ public class SessionTest {
             @Override
             public AcmeProvider provider() {
                 return mockProvider;
-            };
+            }
         };
 
         assertThat(session.resourceUrl(Resource.NEW_ACCOUNT),
@@ -179,11 +184,15 @@ public class SessionTest {
         assertThat(meta.getTermsOfService(), is(nullValue()));
         assertThat(meta.getWebsite(), is(nullValue()));
         assertThat(meta.getCaaIdentities(), is(empty()));
+        assertThat(meta.isStarEnabled(), is(false));
+        assertThat(meta.getStarMaxRenewal(), is(nullValue()));
+        assertThat(meta.getStarMinCertValidity(), is(nullValue()));
+        assertThat(meta.isStarCertificateGetAllowed(), is(false));
     }
 
     /**
      * Asserts that the {@link Session} returns correct
-     * {@link Session#resourceUri(Resource)} and {@link Session#getMetadata()}.
+     * {@link Session#resourceUrl(Resource)} and {@link Session#getMetadata()}.
      *
      * @param session
      *            {@link Session} to assert
@@ -208,6 +217,10 @@ public class SessionTest {
         assertThat(meta.getTermsOfService(), is(URI.create("https://example.com/acme/terms")));
         assertThat(meta.getWebsite(), is(url("https://www.example.com/")));
         assertThat(meta.getCaaIdentities(), containsInAnyOrder("example.com"));
+        assertThat(meta.isStarEnabled(), is(true));
+        assertThat(meta.getStarMaxRenewal(), is(Duration.ofDays(365)));
+        assertThat(meta.getStarMinCertValidity(), is(Duration.ofHours(24)));
+        assertThat(meta.isStarCertificateGetAllowed(), is(true));
         assertThat(meta.isExternalAccountRequired(), is(true));
         assertThat(meta.getJSON(), is(notNullValue()));
     }

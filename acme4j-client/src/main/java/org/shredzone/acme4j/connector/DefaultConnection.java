@@ -14,7 +14,6 @@
 package org.shredzone.acme4j.connector;
 
 import static java.util.stream.Collectors.toList;
-import static org.shredzone.acme4j.toolbox.AcmeUtils.keyAlgorithm;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -24,6 +23,7 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
@@ -41,9 +41,6 @@ import javax.annotation.CheckForNull;
 import javax.annotation.Nullable;
 import javax.annotation.ParametersAreNonnullByDefault;
 
-import org.jose4j.jwk.PublicJsonWebKey;
-import org.jose4j.jws.JsonWebSignature;
-import org.jose4j.lang.JoseException;
 import org.shredzone.acme4j.Login;
 import org.shredzone.acme4j.Problem;
 import org.shredzone.acme4j.Session;
@@ -58,6 +55,7 @@ import org.shredzone.acme4j.exception.AcmeUserActionRequiredException;
 import org.shredzone.acme4j.toolbox.AcmeUtils;
 import org.shredzone.acme4j.toolbox.JSON;
 import org.shredzone.acme4j.toolbox.JSONBuilder;
+import org.shredzone.acme4j.toolbox.JoseUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -78,8 +76,9 @@ public class DefaultConnection implements Connection {
     private static final String REPLAY_NONCE_HEADER = "Replay-Nonce";
     private static final String RETRY_AFTER_HEADER = "Retry-After";
     private static final String DEFAULT_CHARSET = "utf-8";
-
-    private static final Pattern BASE64URL_PATTERN = Pattern.compile("[0-9A-Za-z_-]+");
+    private static final String MIME_JSON = "application/json";
+    private static final String MIME_JSON_PROBLEM = "application/problem+json";
+    private static final String MIME_CERTIFICATE_CHAIN = "application/pem-certificate-chain";
 
     private static final URI BAD_NONCE_ERROR = URI.create("urn:ietf:params:acme:error:badNonce");
     private static final int MAX_ATTEMPTS = 10;
@@ -106,10 +105,14 @@ public class DefaultConnection implements Connection {
 
             URL newNonceUrl = session.resourceUrl(Resource.NEW_NONCE);
 
-            conn = httpConnector.openConnection(newNonceUrl, session.getProxy());
+            LOG.debug("HEAD {}", newNonceUrl);
+
+            conn = httpConnector.openConnection(newNonceUrl, session.networkSettings());
             conn.setRequestMethod("HEAD");
             conn.setRequestProperty(ACCEPT_LANGUAGE_HEADER, session.getLocale().toLanguageTag());
             conn.connect();
+
+            logHeaders();
 
             int rc = conn.getResponseCode();
             if (rc != HttpURLConnection.HTTP_OK && rc != HttpURLConnection.HTTP_NO_CONTENT) {
@@ -130,98 +133,59 @@ public class DefaultConnection implements Connection {
 
     @Override
     public void sendRequest(URL url, Session session) throws AcmeException {
-        Objects.requireNonNull(url, "url");
-        Objects.requireNonNull(session, "session");
-        assertConnectionIsClosed();
+        sendRequest(url, session, MIME_JSON);
+    }
 
-        LOG.debug("GET {}", url);
+    @Override
+    public int sendCertificateRequest(URL url, Login login) throws AcmeException {
+        return sendSignedRequest(url, null, login.getSession(), login.getKeyPair(),
+                login.getAccountLocation(), MIME_CERTIFICATE_CHAIN);
+    }
 
-        try {
-            conn = httpConnector.openConnection(url, session.getProxy());
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty(ACCEPT_CHARSET_HEADER, DEFAULT_CHARSET);
-            conn.setRequestProperty(ACCEPT_LANGUAGE_HEADER, session.getLocale().toLanguageTag());
-            conn.setDoOutput(false);
-
-            conn.connect();
-
-            logHeaders();
-
-            int rc = conn.getResponseCode();
-            if (rc != HttpURLConnection.HTTP_OK) {
-                throwAcmeException();
-            }
-
-        } catch (IOException ex) {
-            throw new AcmeNetworkException(ex);
-        }
+    @Override
+    public int sendSignedPostAsGetRequest(URL url, Login login) throws AcmeException {
+        return sendSignedRequest(url, null, login.getSession(), login.getKeyPair(),
+                login.getAccountLocation(), MIME_JSON);
     }
 
     @Override
     public int sendSignedRequest(URL url, JSONBuilder claims, Login login) throws AcmeException {
-        return sendSignedRequest(url, claims, login.getSession(), login.getKeyPair(), login.getAccountLocation());
+        return sendSignedRequest(url, claims, login.getSession(), login.getKeyPair(),
+                login.getAccountLocation(), MIME_JSON);
     }
 
     @Override
     public int sendSignedRequest(URL url, JSONBuilder claims, Session session, KeyPair keypair)
                 throws AcmeException {
-        return sendSignedRequest(url, claims, session, keypair, null);
-    }
-
-    private int sendSignedRequest(URL url, JSONBuilder claims, Session session, KeyPair keypair, @Nullable URL accountLocation)
-                throws AcmeException {
-        Objects.requireNonNull(url, "url");
-        Objects.requireNonNull(claims, "claims");
-        Objects.requireNonNull(session, "session");
-        Objects.requireNonNull(keypair, "keypair");
-        assertConnectionIsClosed();
-
-        AcmeException lastException = null;
-
-        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            try {
-                return performRequest(url, claims, session, keypair, accountLocation);
-            } catch (AcmeServerException ex) {
-                if (!BAD_NONCE_ERROR.equals(ex.getType())) {
-                    throw ex;
-                }
-                lastException = ex;
-                LOG.info("Bad Replay Nonce, trying again (attempt {}/{})", attempt, MAX_ATTEMPTS);
-            }
-        }
-
-        throw new AcmeException("Too many reattempts", lastException);
+        return sendSignedRequest(url, claims, session, keypair, null, MIME_JSON);
     }
 
     @Override
-    @CheckForNull
     public JSON readJsonResponse() throws AcmeException {
         assertConnectionIsOpen();
 
         if (conn.getContentLength() == 0) {
-            return null;
+            throw new AcmeProtocolException("Empty response");
         }
 
         String contentType = AcmeUtils.getContentType(conn.getHeaderField(CONTENT_TYPE_HEADER));
-        if (!("application/json".equals(contentType)
-                    || "application/problem+json".equals(contentType))) {
+        if (!(MIME_JSON.equals(contentType) || MIME_JSON_PROBLEM.equals(contentType))) {
             throw new AcmeProtocolException("Unexpected content type: " + contentType);
         }
-
-        JSON result = null;
 
         try {
             InputStream in =
                     conn.getResponseCode() < 400 ? conn.getInputStream() : conn.getErrorStream();
-            if (in != null) {
-                result = JSON.parse(in);
-                LOG.debug("Result JSON: {}", result.toString());
+            if (in == null) {
+                throw new AcmeProtocolException("JSON response is empty");
             }
+
+            JSON result = JSON.parse(in);
+            LOG.debug("Result JSON: {}", result.toString());
+            return result;
         } catch (IOException ex) {
             throw new AcmeNetworkException(ex);
         }
-
-        return result;
     }
 
     @Override
@@ -229,7 +193,7 @@ public class DefaultConnection implements Connection {
         assertConnectionIsOpen();
 
         String contentType = AcmeUtils.getContentType(conn.getHeaderField(CONTENT_TYPE_HEADER));
-        if (!("application/pem-certificate-chain".equals(contentType))) {
+        if (!(MIME_CERTIFICATE_CHAIN.equals(contentType))) {
             throw new AcmeProtocolException("Unexpected content type: " + contentType);
         }
 
@@ -265,7 +229,7 @@ public class DefaultConnection implements Connection {
             return null;
         }
 
-        if (!BASE64URL_PATTERN.matcher(nonceHeader).matches()) {
+        if (!AcmeUtils.isValidBase64Url(nonceHeader)) {
             throw new AcmeProtocolException("Invalid replay nonce: " + nonceHeader);
         }
 
@@ -301,12 +265,59 @@ public class DefaultConnection implements Connection {
     }
 
     /**
-     * Performs the POST request.
+     * Sends an unsigned GET request.
+     *
+     * @param url
+     *            {@link URL} to send the request to.
+     * @param session
+     *            {@link Session} instance to be used for signing and tracking
+     * @param accept
+     *            Accept header
+     * @return HTTP 200 class status that was returned
+     */
+    protected int sendRequest(URL url, Session session, String accept) throws AcmeException {
+        Objects.requireNonNull(url, "url");
+        Objects.requireNonNull(session, "session");
+        Objects.requireNonNull(accept, "accept");
+        assertConnectionIsClosed();
+
+        LOG.debug("GET {}", url);
+
+        try {
+            conn = httpConnector.openConnection(url, session.networkSettings());
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty(ACCEPT_HEADER, accept);
+            conn.setRequestProperty(ACCEPT_CHARSET_HEADER, DEFAULT_CHARSET);
+            conn.setRequestProperty(ACCEPT_LANGUAGE_HEADER, session.getLocale().toLanguageTag());
+            conn.setDoOutput(false);
+
+            conn.connect();
+
+            logHeaders();
+
+            String nonce = getNonce();
+            if (nonce != null) {
+                session.setNonce(nonce);
+            }
+
+            int rc = conn.getResponseCode();
+            if (rc != HttpURLConnection.HTTP_OK && rc != HttpURLConnection.HTTP_CREATED) {
+                throwAcmeException();
+            }
+            return rc;
+        } catch (IOException ex) {
+            throw new AcmeNetworkException(ex);
+        }
+    }
+
+    /**
+     * Sends a signed POST request.
      *
      * @param url
      *            {@link URL} to send the request to.
      * @param claims
-     *            {@link JSONBuilder} containing claims. Must not be {@code null}.
+     *            {@link JSONBuilder} containing claims. {@code null} for POST-as-GET
+     *            request.
      * @param session
      *            {@link Session} instance to be used for signing and tracking
      * @param keypair
@@ -314,50 +325,79 @@ public class DefaultConnection implements Connection {
      * @param accountLocation
      *            If set, the account location is set as "kid" header. If {@code null},
      *            the public key is set as "jwk" header.
+     * @param accept
+     *            Accept header
      * @return HTTP 200 class status that was returned
      */
-    private int performRequest(URL url, JSONBuilder claims, Session session, KeyPair keypair,
-                @Nullable URL accountLocation)
+    protected int sendSignedRequest(URL url, @Nullable JSONBuilder claims, Session session,
+                KeyPair keypair, @Nullable URL accountLocation, String accept) throws AcmeException {
+        Objects.requireNonNull(url, "url");
+        Objects.requireNonNull(session, "session");
+        Objects.requireNonNull(keypair, "keypair");
+        Objects.requireNonNull(accept, "accept");
+        assertConnectionIsClosed();
+
+        int attempt = 1;
+        while (true) {
+            try {
+                return performRequest(url, claims, session, keypair, accountLocation, accept);
+            } catch (AcmeServerException ex) {
+                if (!BAD_NONCE_ERROR.equals(ex.getType())) {
+                    throw ex;
+                }
+                if (attempt == MAX_ATTEMPTS) {
+                    throw ex;
+                }
+                LOG.info("Bad Replay Nonce, trying again (attempt {}/{})", attempt, MAX_ATTEMPTS);
+                attempt++;
+            }
+        }
+    }
+
+    /**
+     * Performs the POST request.
+     *
+     * @param url
+     *            {@link URL} to send the request to.
+     * @param claims
+     *            {@link JSONBuilder} containing claims. {@code null} for POST-as-GET
+     *            request.
+     * @param session
+     *            {@link Session} instance to be used for signing and tracking
+     * @param keypair
+     *            {@link KeyPair} to be used for signing
+     * @param accountLocation
+     *            If set, the account location is set as "kid" header. If {@code null},
+     *            the public key is set as "jwk" header.
+     * @param accept
+     *            Accept header
+     * @return HTTP 200 class status that was returned
+     */
+    private int performRequest(URL url, @Nullable JSONBuilder claims, Session session,
+                KeyPair keypair, @Nullable URL accountLocation, String accept)
                 throws AcmeException {
         try {
             if (session.getNonce() == null) {
                 resetNonce(session);
             }
 
-            conn = httpConnector.openConnection(url, session.getProxy());
+            conn = httpConnector.openConnection(url, session.networkSettings());
             conn.setRequestMethod("POST");
-            conn.setRequestProperty(ACCEPT_HEADER, "application/json");
+            conn.setRequestProperty(ACCEPT_HEADER, accept);
             conn.setRequestProperty(ACCEPT_CHARSET_HEADER, DEFAULT_CHARSET);
             conn.setRequestProperty(ACCEPT_LANGUAGE_HEADER, session.getLocale().toLanguageTag());
             conn.setRequestProperty(CONTENT_TYPE_HEADER, "application/jose+json");
             conn.setDoOutput(true);
 
-            final PublicJsonWebKey jwk = PublicJsonWebKey.Factory.newPublicJwk(keypair.getPublic());
-            JsonWebSignature jws = new JsonWebSignature();
-            jws.setPayload(claims.toString());
-            jws.getHeaders().setObjectHeaderValue("nonce", session.getNonce());
-            jws.getHeaders().setObjectHeaderValue("url", url);
-            if (accountLocation == null) {
-                jws.getHeaders().setJwkHeaderValue("jwk", jwk);
-            } else {
-                jws.getHeaders().setObjectHeaderValue("kid", accountLocation);
-            }
+            JSONBuilder jose = JoseUtils.createJoseRequest(
+                    url,
+                    keypair,
+                    claims,
+                    session.getNonce(),
+                    accountLocation != null ? accountLocation.toString() : null
+            );
 
-            jws.setAlgorithmHeaderValue(keyAlgorithm(jwk));
-            jws.setKey(keypair.getPrivate());
-            jws.sign();
-
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("POST {}", url);
-                LOG.debug("  Payload: {}", claims.toString());
-                LOG.debug("  JWS Header: {}", jws.getHeaders().getFullHeaderAsJsonString());
-            }
-
-            JSONBuilder jb = new JSONBuilder();
-            jb.put("protected", jws.getHeaders().getEncodedHeader());
-            jb.put("payload", jws.getEncodedPayload());
-            jb.put("signature", jws.getEncodedSignature());
-            byte[] outputData = jb.toString().getBytes(DEFAULT_CHARSET);
+            byte[] outputData = jose.toString().getBytes(StandardCharsets.UTF_8);
 
             conn.setFixedLengthStreamingMode(outputData.length);
             conn.connect();
@@ -377,8 +417,6 @@ public class DefaultConnection implements Connection {
             return rc;
         } catch (IOException ex) {
             throw new AcmeNetworkException(ex);
-        } catch (JoseException ex) {
-            throw new AcmeProtocolException("Failed to generate a JSON request", ex);
         }
     }
 
@@ -417,15 +455,11 @@ public class DefaultConnection implements Connection {
     private void throwAcmeException() throws AcmeException {
         try {
             String contentType = AcmeUtils.getContentType(conn.getHeaderField(CONTENT_TYPE_HEADER));
-            if (!"application/problem+json".equals(contentType)) {
+            if (!MIME_JSON_PROBLEM.equals(contentType)) {
                 throw new AcmeException("HTTP " + conn.getResponseCode() + ": " + conn.getResponseMessage());
             }
 
-            JSON problemJson = readJsonResponse();
-            if (problemJson == null) {
-                throw new AcmeProtocolException("Empty problem response");
-            }
-            Problem problem = new Problem(problemJson, conn.getURL());
+            Problem problem = new Problem(readJsonResponse(), conn.getURL());
 
             String error = AcmeUtils.stripErrorPrefix(problem.getType().toString());
 
@@ -443,7 +477,7 @@ public class DefaultConnection implements Connection {
 
             if ("rateLimited".equals(error)) {
                 Optional<Instant> retryAfter = getRetryAfterHeader();
-                Collection<URL> rateLimits = getLinks("urn:ietf:params:acme:documentation");
+                Collection<URL> rateLimits = getLinks("help");
                 throw new AcmeRateLimitedException(problem, retryAfter.orElse(null), rateLimits);
             }
 

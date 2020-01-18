@@ -13,9 +13,11 @@
  */
 package org.shredzone.acme4j;
 
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.Assert.assertThat;
-import static org.shredzone.acme4j.toolbox.TestUtils.*;
+import static org.shredzone.acme4j.toolbox.TestUtils.getJSON;
+import static org.shredzone.acme4j.toolbox.TestUtils.url;
 import static uk.co.datumedge.hamcrest.json.SameJSONAs.sameJSONAs;
 
 import java.io.ByteArrayOutputStream;
@@ -55,9 +57,10 @@ public class CertificateTest {
 
         TestableConnectionProvider provider = new TestableConnectionProvider() {
             @Override
-            public void sendRequest(URL url, Session session) {
+            public int sendCertificateRequest(URL url, Login login) {
                 assertThat(url, is(locationUrl));
-                assertThat(session, is(notNullValue()));
+                assertThat(login, is(notNullValue()));
+                return HttpURLConnection.HTTP_OK;
             }
 
             @Override
@@ -124,10 +127,11 @@ public class CertificateTest {
             private boolean certRequested = false;
 
             @Override
-            public void sendRequest(URL url, Session session) {
+            public int sendCertificateRequest(URL url, Login login) {
                 assertThat(url, is(locationUrl));
-                assertThat(session, is(notNullValue()));
+                assertThat(login, is(notNullValue()));
                 certRequested = true;
+                return HttpURLConnection.HTTP_OK;
             }
 
             @Override
@@ -171,10 +175,11 @@ public class CertificateTest {
             private boolean certRequested = false;
 
             @Override
-            public void sendRequest(URL url, Session session) {
+            public int sendCertificateRequest(URL url, Login login) {
                 assertThat(url, is(locationUrl));
-                assertThat(session, is(notNullValue()));
+                assertThat(login, is(notNullValue()));
                 certRequested = true;
+                return HttpURLConnection.HTTP_OK;
             }
 
             @Override

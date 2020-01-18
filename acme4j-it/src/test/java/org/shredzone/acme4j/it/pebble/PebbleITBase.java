@@ -37,13 +37,15 @@ import org.shredzone.acme4j.util.KeyPairUtils;
  * <a href="https://github.com/letsencrypt/pebble">Pebble</a> ACME test server at
  * localhost port 14000. The host and port can be changed via the system property
  * {@code pebbleHost} and {@code pebblePort} respectively.
+ * <p>
+ * Also, a running pebble-challtestsrv is required to listen on localhost port 8055. The
+ * server's base URL can be changed via the system property {@code bammbammUrl}.
  */
 public abstract class PebbleITBase {
     private final String pebbleHost = System.getProperty("pebbleHost", "localhost");
     private final int pebblePort = Integer.parseInt(System.getProperty("pebblePort", "14000"));
 
-    private final String bammbammUrl = System.getProperty("bammbammUrl", "http://localhost:14001");
-    private final String bammbammHostname = System.getProperty("bammbammHostname", "bammbamm");
+    private final String bammbammUrl = System.getProperty("bammbammUrl", "http://localhost:8055");
 
     private BammBammClient bammBammClient;
 
@@ -79,13 +81,6 @@ public abstract class PebbleITBase {
     }
 
     /**
-     * @return Hostname or IP address of the BammBamm server.
-     */
-    protected String getBammBammHostname() {
-        return bammbammHostname;
-    }
-
-    /**
      * Creates a fresh key pair.
      *
      * @return Created {@link KeyPair}, guaranteed to be unknown to the Pebble server
@@ -106,7 +101,7 @@ public abstract class PebbleITBase {
         assertThat(url.getProtocol(), is("https"));
         assertThat(url.getHost(), is(pebbleHost));
         assertThat(url.getPort(), is(pebblePort));
-        assertThat(url.getPath(), not(isEmptyOrNullString()));
+        assertThat(url.getPath(), not(emptyOrNullString()));
     }
 
     /**

@@ -14,7 +14,8 @@
 package org.shredzone.acme4j.toolbox;
 
 import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.fail;
 import static org.shredzone.acme4j.toolbox.TestUtils.url;
 import static uk.co.datumedge.hamcrest.json.SameJSONAs.sameJSONAs;
 
@@ -27,12 +28,14 @@ import java.io.ObjectOutputStream;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.stream.Collectors;
 
@@ -56,6 +59,7 @@ public class JSONTest {
     public void testEmpty() {
         JSON empty = JSON.empty();
         assertThat(empty.toString(), is("{}"));
+        assertThat(empty.toMap().keySet(), is(empty()));
     }
 
     /**
@@ -67,10 +71,20 @@ public class JSONTest {
 
         JSON fromString = JSON.parse(json);
         assertThat(fromString.toString(), is(sameJSONAs(json)));
+        Map<String, Object> map = fromString.toMap();
+        assertThat(map.size(), is(2));
+        assertThat(map.keySet(), containsInAnyOrder("foo", "bar"));
+        assertThat(map.get("foo"), is("a-text"));
+        assertThat(map.get("bar"), is(123L));
 
         try (InputStream in = new ByteArrayInputStream(json.getBytes("utf-8"))) {
             JSON fromStream = JSON.parse(in);
             assertThat(fromStream.toString(), is(sameJSONAs(json)));
+            Map<String, Object> map2 = fromStream.toMap();
+            assertThat(map2.size(), is(2));
+            assertThat(map2.keySet(), containsInAnyOrder("foo", "bar"));
+            assertThat(map2.get("foo"), is("a-text"));
+            assertThat(map2.get("bar"), is(123L));
         }
     }
 
@@ -91,7 +105,7 @@ public class JSONTest {
 
         assertThat(json.keySet(), containsInAnyOrder(
                     "text", "number", "boolean", "uri", "url", "date", "array",
-                    "collect", "status", "binary", "problem"));
+                    "collect", "status", "binary", "duration", "problem", "encoded"));
         assertThat(json.contains("text"), is(true));
         assertThat(json.contains("music"), is(false));
         assertThat(json.get("text"), is(notNullValue()));
@@ -201,6 +215,7 @@ public class JSONTest {
         assertThat(json.get("date").asInstant(), is(date));
         assertThat(json.get("status").asStatus(), is(Status.VALID));
         assertThat(json.get("binary").asBinary(), is("Chainsaw".getBytes()));
+        assertThat(json.get("duration").asDuration(), is(Duration.ofSeconds(86400)));
 
         assertThat(json.get("text").isPresent(), is(true));
         assertThat(json.get("text").optional().isPresent(), is(true));
@@ -217,6 +232,9 @@ public class JSONTest {
 
         JSON sub = array.get(3).asObject();
         assertThat(sub.get("test").asString(), is("ok"));
+
+        JSON encodedSub = json.get("encoded").asEncodedObject();
+        assertThat(encodedSub.toString(), is(sameJSONAs("{\"key\":\"value\"}")));
 
         Problem problem = json.get("problem").asProblem(BASE_URL);
         assertThat(problem, is(notNullValue()));
@@ -266,8 +284,22 @@ public class JSONTest {
         }
 
         try {
+            json.get("none").asDuration();
+            fail("asDuration did not fail");
+        } catch (AcmeProtocolException ex) {
+            // expected
+        }
+
+        try {
             json.get("none").asObject();
             fail("asObject did not fail");
+        } catch (AcmeProtocolException ex) {
+            // expected
+        }
+
+        try {
+            json.get("none").asEncodedObject();
+            fail("asEncodedObject did not fail");
         } catch (AcmeProtocolException ex) {
             // expected
         }
@@ -323,6 +355,13 @@ public class JSONTest {
         }
 
         try {
+            json.get("text").asEncodedObject();
+            fail("no exception was thrown");
+        } catch (AcmeProtocolException ex) {
+            // expected
+        }
+
+        try {
             json.get("text").asArray();
             fail("no exception was thrown");
         } catch (AcmeProtocolException ex) {
@@ -352,6 +391,13 @@ public class JSONTest {
 
         try {
             json.get("text").asInstant();
+            fail("no exception was thrown");
+        } catch (AcmeProtocolException ex) {
+            // expected
+        }
+
+        try {
+            json.get("text").asDuration();
             fail("no exception was thrown");
         } catch (AcmeProtocolException ex) {
             // expected
@@ -390,7 +436,7 @@ public class JSONTest {
         }
 
         assertThat(testJson, not(sameInstance(originalJson)));
-        assertThat(testJson.toString(), not(isEmptyOrNullString()));
+        assertThat(testJson.toString(), not(emptyOrNullString()));
         assertThat(testJson.toString(), is(sameJSONAs(originalJson.toString())));
     }
 

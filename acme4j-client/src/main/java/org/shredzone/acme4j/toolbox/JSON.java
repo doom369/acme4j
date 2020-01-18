@@ -27,6 +27,8 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
@@ -46,24 +48,23 @@ import javax.annotation.ParametersAreNonnullByDefault;
 import javax.annotation.WillClose;
 import javax.annotation.concurrent.Immutable;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.jose4j.json.JsonUtil;
 import org.jose4j.lang.JoseException;
+import org.shredzone.acme4j.Identifier;
 import org.shredzone.acme4j.Problem;
 import org.shredzone.acme4j.Status;
 import org.shredzone.acme4j.exception.AcmeProtocolException;
 
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
-
 /**
  * A model containing a JSON result. The content is immutable.
  */
-@SuppressWarnings("unchecked")
 @ParametersAreNonnullByDefault
 @Immutable
 public final class JSON implements Serializable {
     private static final long serialVersionUID = 3091273044605709204L;
 
-    private static final JSON EMPTY_JSON = new JSON(new HashMap<String, Object>());
+    private static final JSON EMPTY_JSON = new JSON(new HashMap<>());
 
     private final String path;
 
@@ -170,6 +171,15 @@ public final class JSON implements Serializable {
     @Override
     public String toString() {
         return JsonUtil.toJson(data);
+    }
+
+    /**
+     * Returns the content as unmodifiable Map.
+     *
+     * @since 2.8
+     */
+    public Map<String,Object> toMap() {
+        return Collections.unmodifiableMap(data);
     }
 
     /**
@@ -339,6 +349,21 @@ public final class JSON implements Serializable {
         }
 
         /**
+         * Returns the value as JSON object that was Base64 URL encoded.
+         *
+         * @since 2.8
+         */
+        public JSON asEncodedObject() {
+            required();
+            try {
+                byte[] raw = AcmeUtils.base64UrlDecode(val.toString());
+                return new JSON(path, JsonUtil.parseJson(new String(raw, StandardCharsets.UTF_8)));
+            } catch (IllegalArgumentException | JoseException ex) {
+                throw new AcmeProtocolException(path + ": expected an encoded object", ex);
+            }
+        }
+
+        /**
          * Returns the value as {@link Problem}.
          *
          * @param baseUrl
@@ -347,6 +372,16 @@ public final class JSON implements Serializable {
         public Problem asProblem(URL baseUrl) {
             required();
             return new Problem(asObject(), baseUrl);
+        }
+
+        /**
+         * Returns the value as {@link Identifier}.
+         *
+         * @since 2.3
+         */
+        public Identifier asIdentifier() {
+            required();
+            return new Identifier(asObject());
         }
 
         /**
@@ -424,6 +459,20 @@ public final class JSON implements Serializable {
                 return parseTimestamp(val.toString());
             } catch (IllegalArgumentException ex) {
                 throw new AcmeProtocolException(path + ": bad date " + val, ex);
+            }
+        }
+
+        /**
+         * Returns the value as {@link Duration}.
+         *
+         * @since 2.3
+         */
+        public Duration asDuration() {
+            required();
+            try {
+                return Duration.ofSeconds(((Number) val).longValue());
+            } catch (ClassCastException ex) {
+                throw new AcmeProtocolException(path + ": bad duration " + val, ex);
             }
         }
 

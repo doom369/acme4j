@@ -42,6 +42,16 @@ public class DummyConnection implements Connection {
     }
 
     @Override
+    public int sendCertificateRequest(URL url, Login login) throws AcmeException {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public int sendSignedPostAsGetRequest(URL url, Login login) throws AcmeException {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public int sendSignedRequest(URL url, JSONBuilder claims, Login login)
                 throws AcmeException {
         throw new UnsupportedOperationException();

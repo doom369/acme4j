@@ -14,7 +14,8 @@
 package org.shredzone.acme4j.provider;
 
 import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.*;
 import static org.shredzone.acme4j.toolbox.TestUtils.getJSON;
 import static uk.co.datumedge.hamcrest.json.SameJSONAs.sameJSONAs;
@@ -50,6 +51,8 @@ public class AbstractAcmeProviderTest {
      */
     @Test
     public void testConnect() {
+        final URI testServerUri = URI.create("http://example.com/acme");
+
         final AtomicBoolean invoked = new AtomicBoolean();
 
         AbstractAcmeProvider provider = new AbstractAcmeProvider() {
@@ -70,7 +73,7 @@ public class AbstractAcmeProviderTest {
             }
         };
 
-        Connection connection = provider.connect();
+        Connection connection = provider.connect(testServerUri);
         assertThat(connection, not(nullValue()));
         assertThat(connection, instanceOf(DefaultConnection.class));
         assertThat(invoked.get(), is(true));
@@ -90,7 +93,8 @@ public class AbstractAcmeProviderTest {
 
         AbstractAcmeProvider provider = new AbstractAcmeProvider() {
             @Override
-            public Connection connect() {
+            public Connection connect(URI serverUri) {
+                assertThat(serverUri, is(testServerUri));
                 return connection;
             }
 

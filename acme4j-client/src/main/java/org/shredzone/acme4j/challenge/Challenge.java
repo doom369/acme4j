@@ -148,16 +148,12 @@ public class Challenge extends AcmeJsonResource {
      */
     public void trigger() throws AcmeException {
         LOG.debug("trigger");
-        try (Connection conn = connect()) {
+        try (Connection conn = getSession().connect()) {
             JSONBuilder claims = new JSONBuilder();
             prepareResponse(claims);
 
             conn.sendSignedRequest(getLocation(), claims, getLogin());
-
-            JSON json = conn.readJsonResponse();
-            if (json != null) {
-                setJSON(json);
-            }
+            setJSON(conn.readJsonResponse());
         }
     }
 

@@ -13,6 +13,7 @@
  */
 package org.shredzone.acme4j.util;
 
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 import static org.shredzone.acme4j.toolbox.AcmeUtils.toAce;
 
@@ -20,6 +21,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
+import java.net.InetAddress;
 import java.security.KeyPair;
 import java.security.PrivateKey;
 import java.security.interfaces.ECKey;
@@ -48,6 +50,7 @@ import org.bouncycastle.pkcs.PKCS10CertificationRequestBuilder;
 import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
 import org.bouncycastle.util.io.pem.PemObject;
 import org.bouncycastle.util.io.pem.PemWriter;
+import org.shredzone.acme4j.Identifier;
 
 /**
  * Generator for a CSR (Certificate Signing Request) suitable for ACME servers.
@@ -61,6 +64,7 @@ public class CSRBuilder {
 
     private final X500NameBuilder namebuilder = new X500NameBuilder(X500Name.getDefaultStyle());
     private final List<String> namelist = new ArrayList<>();
+    private final List<InetAddress> iplist = new ArrayList<>();
     private PKCS10CertificationRequest csr = null;
 
     /**
@@ -76,7 +80,7 @@ public class CSRBuilder {
      *            Domain name to add
      */
     public void addDomain(String domain) {
-        String ace = toAce(domain);
+        String ace = toAce(requireNonNull(domain));
         if (namelist.isEmpty()) {
             namebuilder.addRDN(BCStyle.CN, ace);
         }
@@ -108,12 +112,86 @@ public class CSRBuilder {
     }
 
     /**
+     * Adds an {@link InetAddress}. All IP addresses will be set as iPAddress <em>Subject
+     * Alternative Name</em>.
+     *
+     * @param address
+     *            {@link InetAddress} to add
+     * @since 2.4
+     */
+    public void addIP(InetAddress address) {
+        iplist.add(requireNonNull(address));
+    }
+
+    /**
+     * Adds a {@link Collection} of IP addresses.
+     *
+     * @param ips
+     *            Collection of IP addresses to add
+     * @since 2.4
+     */
+    public void addIPs(Collection<InetAddress> ips) {
+        ips.forEach(this::addIP);
+    }
+
+    /**
+     * Adds multiple IP addresses.
+     *
+     * @param ips
+     *            IP addresses to add
+     * @since 2.4
+     */
+    public void addIPs(InetAddress... ips) {
+        Arrays.stream(ips).forEach(this::addIP);
+    }
+
+    /**
+     * Adds an {@link Identifier}. Only DNS and IP types are supported.
+     *
+     * @param id
+     *            {@link Identifier} to add
+     * @since 2.7
+     */
+    public void addIdentifier(Identifier id) {
+        requireNonNull(id);
+        if (Identifier.TYPE_DNS.equals(id.getType())) {
+            addDomain(id.getDomain());
+        } else if (Identifier.TYPE_IP.equals(id.getType())) {
+            addIP(id.getIP());
+        } else {
+            throw new IllegalArgumentException("Unknown identifier type: " + id.getType());
+        }
+    }
+
+    /**
+     * Adds a {@link Collection} of {@link Identifier}.
+     *
+     * @param ids
+     *            Collection of Identifiers to add
+     * @since 2.7
+     */
+    public void addIdentifiers(Collection<Identifier> ids) {
+        ids.forEach(this::addIdentifier);
+    }
+
+    /**
+     * Adds multiple {@link Identifier}.
+     *
+     * @param ids
+     *            Identifiers to add
+     * @since 2.7
+     */
+    public void addIdentifiers(Identifier... ids) {
+        Arrays.stream(ids).forEach(this::addIdentifier);
+    }
+
+    /**
      * Sets the organization.
      * <p>
      * Note that it is at the discretion of the ACME server to accept this parameter.
      */
     public void setOrganization(String o) {
-        namebuilder.addRDN(BCStyle.O, o);
+        namebuilder.addRDN(BCStyle.O, requireNonNull(o));
     }
 
     /**
@@ -122,7 +200,7 @@ public class CSRBuilder {
      * Note that it is at the discretion of the ACME server to accept this parameter.
      */
     public void setOrganizationalUnit(String ou) {
-        namebuilder.addRDN(BCStyle.OU, ou);
+        namebuilder.addRDN(BCStyle.OU, requireNonNull(ou));
     }
 
     /**
@@ -131,7 +209,7 @@ public class CSRBuilder {
      * Note that it is at the discretion of the ACME server to accept this parameter.
      */
     public void setLocality(String l) {
-        namebuilder.addRDN(BCStyle.L, l);
+        namebuilder.addRDN(BCStyle.L, requireNonNull(l));
     }
 
     /**
@@ -140,7 +218,7 @@ public class CSRBuilder {
      * Note that it is at the discretion of the ACME server to accept this parameter.
      */
     public void setState(String st) {
-        namebuilder.addRDN(BCStyle.ST, st);
+        namebuilder.addRDN(BCStyle.ST, requireNonNull(st));
     }
 
     /**
@@ -149,7 +227,7 @@ public class CSRBuilder {
      * Note that it is at the discretion of the ACME server to accept this parameter.
      */
     public void setCountry(String c) {
-        namebuilder.addRDN(BCStyle.C, c);
+        namebuilder.addRDN(BCStyle.C, requireNonNull(c));
     }
 
     /**
@@ -160,14 +238,18 @@ public class CSRBuilder {
      */
     public void sign(KeyPair keypair) throws IOException {
         Objects.requireNonNull(keypair, "keypair");
-        if (namelist.isEmpty()) {
-            throw new IllegalStateException("No domain was set");
+        if (namelist.isEmpty() && iplist.isEmpty()) {
+            throw new IllegalStateException("No domain or IP address was set");
         }
 
         try {
-            GeneralName[] gns = new GeneralName[namelist.size()];
-            for (int ix = 0; ix < namelist.size(); ix++) {
-                gns[ix] = new GeneralName(GeneralName.dNSName, namelist.get(ix));
+            int ix = 0;
+            GeneralName[] gns = new GeneralName[namelist.size() + iplist.size()];
+            for (String name : namelist) {
+                gns[ix++] = new GeneralName(GeneralName.dNSName, name);
+            }
+            for (InetAddress ip : iplist) {
+                gns[ix++] = new GeneralName(GeneralName.iPAddress, ip.getHostAddress());
             }
             GeneralNames subjectAltName = new GeneralNames(gns);
 
@@ -240,6 +322,9 @@ public class CSRBuilder {
         StringBuilder sb = new StringBuilder();
         sb.append(namebuilder.build());
         sb.append(namelist.stream().collect(joining(",DNS=", ",DNS=", "")));
+        sb.append(iplist.stream()
+                    .map(InetAddress::getHostAddress)
+                    .collect(joining(",IP=", ",IP=", "")));
         return sb.toString();
     }
 

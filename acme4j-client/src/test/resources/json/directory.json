@@ -1,7 +1,7 @@
 {
   "newNonce": "https://example.com/acme/new-nonce",
   "newAccount": "https://example.com/acme/new-account",
-  "newOrder": "https://example.com/acme/new-order"
+  "newOrder": "https://example.com/acme/new-order",
   "newAuthz": "https://example.com/acme/new-authz",
   "meta": {
     "termsOfService": "https://example.com/acme/terms",
@@ -10,6 +10,10 @@
       "example.com"
     ],
     "externalAccountRequired": true,
+    "star-enabled": true,
+    "star-min-cert-validity": 86400,
+    "star-max-renewal": 31536000,
+    "star-allow-certificate-get": true,
     "xTestString": "foobar",
     "xTestUri": "https://www.example.org",
     "xTestArray": [

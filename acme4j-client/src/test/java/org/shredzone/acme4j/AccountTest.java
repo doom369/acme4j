@@ -14,14 +14,15 @@
 package org.shredzone.acme4j;
 
 import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
-import static org.shredzone.acme4j.toolbox.TestUtils.*;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.fail;
+import static org.shredzone.acme4j.toolbox.TestUtils.getJSON;
+import static org.shredzone.acme4j.toolbox.TestUtils.url;
 import static uk.co.datumedge.hamcrest.json.SameJSONAs.sameJSONAs;
 
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.security.KeyPair;
 import java.util.Arrays;
@@ -40,7 +41,6 @@ import org.shredzone.acme4j.challenge.Http01Challenge;
 import org.shredzone.acme4j.connector.Resource;
 import org.shredzone.acme4j.exception.AcmeException;
 import org.shredzone.acme4j.exception.AcmeServerException;
-import org.shredzone.acme4j.provider.AcmeProvider;
 import org.shredzone.acme4j.provider.TestableConnectionProvider;
 import org.shredzone.acme4j.toolbox.JSON;
 import org.shredzone.acme4j.toolbox.JSONBuilder;
@@ -73,12 +73,15 @@ public class AccountTest {
             }
 
             @Override
-            public void sendRequest(URL url, Session session) {
+            public int sendSignedPostAsGetRequest(URL url, Login login) {
                 if (url("https://example.com/acme/acct/1/orders").equals(url)) {
                     jsonResponse = new JSONBuilder()
-                                .array("orders", "https://example.com/acme/order/1")
+                                .array("orders", Arrays.asList("https://example.com/acme/order/1"))
                                 .toJSON();
+                } else {
+                    jsonResponse = getJSON("updateAccountResponse");
                 }
+                return HttpURLConnection.HTTP_OK;
             }
 
             @Override
@@ -95,6 +98,11 @@ public class AccountTest {
             public Collection<URL> getLinks(String relation) {
                 return Collections.emptyList();
             }
+
+            @Override
+            public void handleRetryAfter(String message) throws AcmeException {
+                // do nothing
+            }
         };
 
         Login login = provider.createLogin();
@@ -107,6 +115,8 @@ public class AccountTest {
         assertThat(account.getContacts(), hasSize(1));
         assertThat(account.getContacts().get(0), is(URI.create("mailto:foo2@example.com")));
         assertThat(account.getStatus(), is(Status.VALID));
+        assertThat(account.hasExternalAccountBinding(), is(true));
+        assertThat(account.getKeyIdentifier(), is("NCC-1701"));
 
         Iterator<Order> orderIt = account.getOrders();
         assertThat(orderIt, not(nullValue()));
@@ -125,7 +135,7 @@ public class AccountTest {
 
         TestableConnectionProvider provider = new TestableConnectionProvider() {
             @Override
-            public int sendSignedRequest(URL url, JSONBuilder claims, Login login) {
+            public int sendSignedPostAsGetRequest(URL url, Login login) {
                 requestWasSent.set(true);
                 assertThat(url, is(locationUrl));
                 return HttpURLConnection.HTTP_OK;
@@ -147,6 +157,11 @@ public class AccountTest {
                     case "termsOfService": return Arrays.asList(agreementUrl);
                     default: return null;
                 }
+            }
+
+            @Override
+            public void handleRetryAfter(String message) throws AcmeException {
+                // do nothing
             }
         };
 
@@ -202,7 +217,7 @@ public class AccountTest {
         Account account = new Account(login);
         Authorization auth = account.preAuthorizeDomain(domainName);
 
-        assertThat(auth.getDomain(), is(domainName));
+        assertThat(auth.getIdentifier().getDomain(), is(domainName));
         assertThat(auth.getStatus(), is(Status.PENDING));
         assertThat(auth.getExpires(), is(nullValue()));
         assertThat(auth.getLocation(), is(locationUrl));
@@ -341,13 +356,7 @@ public class AccountTest {
 
         provider.putTestResource(Resource.KEY_CHANGE, locationUrl);
 
-        Session session = new Session(new URI(TestUtils.ACME_SERVER_URI)) {
-            @Override
-            public AcmeProvider provider() {
-                return provider;
-            };
-        };
-
+        Session session = TestUtils.session(provider);
         Login login = new Login(locationUrl, oldKeyPair, session);
 
         assertThat(login.getKeyPair(), is(sameInstance(oldKeyPair)));

@@ -14,9 +14,11 @@
 package org.shredzone.acme4j;
 
 import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.fail;
 import static org.shredzone.acme4j.toolbox.AcmeUtils.parseTimestamp;
-import static org.shredzone.acme4j.toolbox.TestUtils.*;
+import static org.shredzone.acme4j.toolbox.TestUtils.getJSON;
+import static org.shredzone.acme4j.toolbox.TestUtils.url;
 
 import java.io.IOException;
 import java.net.HttpURLConnection;
@@ -75,6 +77,30 @@ public class AuthorizationTest {
     }
 
     /**
+     * Test that {@link Authorization#findChallenge(Class)} finds challenges.
+     */
+    @Test
+    public void testFindChallengeByType() throws IOException {
+        Authorization authorization = createChallengeAuthorization();
+
+        // A snail mail challenge is not available at all
+        NonExistingChallenge c1 = authorization.findChallenge(NonExistingChallenge.class);
+        assertThat(c1, is(nullValue()));
+
+        // HttpChallenge is available
+        Http01Challenge c2 = authorization.findChallenge(Http01Challenge.class);
+        assertThat(c2, is(notNullValue()));
+
+        // Dns01Challenge is available
+        Dns01Challenge c3 = authorization.findChallenge(Dns01Challenge.class);
+        assertThat(c3, is(notNullValue()));
+
+        // TlsAlpn01Challenge is available
+        TlsAlpn01Challenge c4 = authorization.findChallenge(TlsAlpn01Challenge.class);
+        assertThat(c4, is(notNullValue()));
+    }
+
+    /**
      * Test that {@link Authorization#findChallenge(String)} fails on duplicate
      * challenges.
      */
@@ -91,8 +117,9 @@ public class AuthorizationTest {
     public void testUpdate() throws Exception {
         TestableConnectionProvider provider = new TestableConnectionProvider() {
             @Override
-            public void sendRequest(URL url, Session session) {
+            public int sendSignedPostAsGetRequest(URL url, Login login) {
                 assertThat(url, is(locationUrl));
+                return HttpURLConnection.HTTP_OK;
             }
 
             @Override
@@ -115,7 +142,7 @@ public class AuthorizationTest {
         Authorization auth = new Authorization(login, locationUrl);
         auth.update();
 
-        assertThat(auth.getDomain(), is("example.org"));
+        assertThat(auth.getIdentifier().getDomain(), is("example.org"));
         assertThat(auth.getStatus(), is(Status.VALID));
         assertThat(auth.isWildcard(), is(false));
         assertThat(auth.getExpires(), is(parseTimestamp("2016-01-02T17:12:40Z")));
@@ -136,8 +163,9 @@ public class AuthorizationTest {
     public void testWildcard() throws Exception {
         TestableConnectionProvider provider = new TestableConnectionProvider() {
             @Override
-            public void sendRequest(URL url, Session session) {
+            public int sendSignedPostAsGetRequest(URL url, Login login) {
                 assertThat(url, is(locationUrl));
+                return HttpURLConnection.HTTP_OK;
             }
 
             @Override
@@ -158,7 +186,7 @@ public class AuthorizationTest {
         Authorization auth = new Authorization(login, locationUrl);
         auth.update();
 
-        assertThat(auth.getDomain(), is("example.org"));
+        assertThat(auth.getIdentifier().getDomain(), is("example.org"));
         assertThat(auth.getStatus(), is(Status.VALID));
         assertThat(auth.isWildcard(), is(true));
         assertThat(auth.getExpires(), is(parseTimestamp("2016-01-02T17:12:40Z")));
@@ -179,9 +207,10 @@ public class AuthorizationTest {
 
         TestableConnectionProvider provider = new TestableConnectionProvider() {
             @Override
-            public void sendRequest(URL url, Session session) {
+            public int sendSignedPostAsGetRequest(URL url, Login login) {
                 requestWasSent.set(true);
                 assertThat(url, is(locationUrl));
+                return HttpURLConnection.HTTP_OK;
             }
 
             @Override
@@ -205,12 +234,12 @@ public class AuthorizationTest {
 
         // Lazy loading
         assertThat(requestWasSent.get(), is(false));
-        assertThat(auth.getDomain(), is("example.org"));
+        assertThat(auth.getIdentifier().getDomain(), is("example.org"));
         assertThat(requestWasSent.get(), is(true));
 
         // Subsequent queries do not trigger another load
         requestWasSent.set(false);
-        assertThat(auth.getDomain(), is("example.org"));
+        assertThat(auth.getIdentifier().getDomain(), is("example.org"));
         assertThat(auth.getStatus(), is(Status.VALID));
         assertThat(auth.isWildcard(), is(false));
         assertThat(auth.getExpires(), is(parseTimestamp("2016-01-02T17:12:40Z")));
@@ -228,8 +257,9 @@ public class AuthorizationTest {
 
         TestableConnectionProvider provider = new TestableConnectionProvider() {
             @Override
-            public void sendRequest(URL url, Session session) {
+            public int sendSignedPostAsGetRequest(URL url, Login login) {
                 assertThat(url, is(locationUrl));
+                return HttpURLConnection.HTTP_OK;
             }
 
             @Override
@@ -258,7 +288,7 @@ public class AuthorizationTest {
             assertThat(ex.getRetryAfter(), is(retryAfter));
         }
 
-        assertThat(auth.getDomain(), is("example.org"));
+        assertThat(auth.getIdentifier().getDomain(), is("example.org"));
         assertThat(auth.getStatus(), is(Status.VALID));
         assertThat(auth.isWildcard(), is(false));
         assertThat(auth.getExpires(), is(parseTimestamp("2016-01-02T17:12:40Z")));
@@ -320,6 +350,15 @@ public class AuthorizationTest {
             Authorization authorization = new Authorization(login, locationUrl);
             authorization.setJSON(getJSON("authorizationChallenges"));
             return authorization;
+        }
+    }
+
+    /**
+     * Dummy challenge that is never going to be created.
+     */
+    private static class NonExistingChallenge extends Challenge {
+        public NonExistingChallenge(Login login, JSON data) {
+            super(login, data);
         }
     }
 
